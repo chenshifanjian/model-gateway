@@ -1,0 +1,93 @@
+name: build
+
+on:
+  push:
+    branches: [revive]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean 网关客户端.spec
+
+      - name: Smoke test (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 产物可能是 dist/vX.Y.Z-网关客户端 或 dist/ModelGateway.app/Contents/MacOS/*
+          BIN=$(find dist -maxdepth 4 -type f -name 'v*' \
+                ! -name '*.exe' ! -name '*.md' ! -name '*.json' | head -1 || true)
+          if [ -z "$BIN" ]; then
+            BIN=$(find dist -type f -path '*.app/Contents/MacOS/*' | head -1 || true)
+          fi
+          if [ -z "$BIN" ]; then echo "::error::built binary not found"; exit 1; fi
+          echo "binary: $BIN"
+          chmod +x "$BIN"
+          GATEWAY_HEADLESS=1 GATEWAY_NO_BROWSER=1 "$BIN" > /tmp/gw.log 2>&1 &
+          GW_PID=$!
+          code=000
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/ || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          echo "GET / -> $code"
+          echo "--- gateway log ---"; cat /tmp/gw.log || true
+          kill "$GW_PID" 2>/dev/null || true
+          [ "$code" = "200" ]
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bin = Get-ChildItem dist -Recurse -Filter '*.exe' |
+                 Where-Object { $_.Name -like 'v*' } | Select-Object -First 1
+          if (-not $bin) { Write-Error 'built exe not found'; exit 1 }
+          Write-Host "binary: $($bin.FullName)"
+          $env:GATEWAY_HEADLESS = '1'
+          $env:GATEWAY_NO_BROWSER = '1'
+          Start-Process $bin.FullName -RedirectStandardOutput gw-out.log -RedirectStandardError gw-err.log
+          $code = '000'
+          foreach ($i in 1..30) {
+            try {
+              $r = Invoke-WebRequest -Uri http://127.0.0.1:8000/ -UseBasicParsing -TimeoutSec 2
+              $code = [string]$r.StatusCode
+            } catch { $code = '000' }
+            if ($code -eq '200') { break }
+            Start-Sleep -Seconds 1
+          }
+          Write-Host "GET / -> $code"
+          Get-Content gw-out.log, gw-err.log -ErrorAction SilentlyContinue
+          Stop-Process -Name ([IO.Path]::GetFileNameWithoutExtension($bin.Name)) -Force -ErrorAction SilentlyContinue
+          if ($code -ne '200') { exit 1 }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-gateway-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
