@@ -3,10 +3,10 @@ import os
 import re
 import sys
 
-# 从 app.py 读取版本号，自动生成带版本号的 exe 名（如 v1.5.0-网关客户端）
+# 从 app.py 读取版本号，自动生成带版本号的 exe 名（如 v1.6.1-模型蓄水池）
 with open('app.py', encoding='utf-8') as _f:
     _ver = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', _f.read()).group(1)
-EXE_NAME = f'v{_ver}-网关客户端'
+EXE_NAME = f'v{_ver}-模型蓄水池'
 
 IS_WIN = sys.platform == "win32"
 
@@ -79,7 +79,7 @@ exe = EXE(
 if sys.platform == "darwin":
     app = BUNDLE(
         exe,
-        name="ModelGateway.app",
+        name="ModelReservoir.app",
         icon=None,
         bundle_identifier="com.modelgateway.client",
     )

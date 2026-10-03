@@ -1,4 +1,4 @@
-# Model Gateway · 无限额度 AI 模型网关
+# 模型蓄水池 · Model Reservoir
 
 聚合多个 LLM 提供商额度，对外提供 **OpenAI 兼容接口**，支持智能轮询、流式故障转移、无感容灾切换。
 
@@ -19,8 +19,8 @@
 通用前置：Python 3.11+。
 
 ```bash
-git clone https://github.com/chenshifanjian/model-gateway.git
-cd model-gateway
+git clone https://github.com/chenshifanjian/model-reservoir.git
+cd model-reservoir
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -72,10 +72,10 @@ python app.py
 ./scripts/build.sh
 
 # Windows（PowerShell）
-pyinstaller 网关客户端.spec
+pyinstaller 模型蓄水池.spec
 ```
 
-spec 文件按平台自动裁剪：Windows 打进 WebView2 安装器与 win32 托盘，macOS 额外产出 `ModelGateway.app`。
+spec 文件按平台自动裁剪：Windows 打进 WebView2 安装器与 win32 托盘，macOS 额外产出 `ModelReservoir.app`。
 
 Linux：`build.sh` 优先用 `.venv-gui`（系统 Python + `--system-site-packages`）打包，spec 检测到本机 gi 类型库就把 Gtk/WebKit2 类型库打进包 → **产物自带原生窗口**（目标机需装 `webkit2gtk-4.1`）；没有 gi 环境则回退 headless 版（浏览器访问）。Linux 系统托盘默认关闭（pystray GTK 与 pywebview 抢主循环会崩）。
 

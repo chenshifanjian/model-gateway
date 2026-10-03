@@ -34,7 +34,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
-logger = logging.getLogger("gateway")
+logger = logging.getLogger("reservoir")
 
 # ============================================================
 # 路径与常量
@@ -2194,7 +2194,7 @@ def _autostart_desktop_content() -> str:
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=Model Gateway\n"
+        "Name=模型蓄水池 (Model Reservoir)\n"
         f"Exec={sys.executable} {main_py}\n"
         "X-GNOME-Autostart-enabled=true\n"
         "NoDisplay=true\n"
@@ -2345,7 +2345,7 @@ async def proxy_models():
 # ============================================================
 # AUTO_KILL：只杀本网关进程（源码 app.py / 打包客户端），绝不误杀同端口的陌生程序
 # ============================================================
-_GATEWAY_MARKERS = ("app.py", "model-gateway", "gateway")
+_GATEWAY_MARKERS = ("app.py", "model-gateway", "gateway", "reservoir")
 
 
 def _looks_like_gateway(info: str) -> bool:
@@ -2353,7 +2353,7 @@ def _looks_like_gateway(info: str) -> bool:
     if not info:
         return False
     low = info.lower()
-    return "网关" in info or any(m in low for m in _GATEWAY_MARKERS)
+    return ("网关" in info or "蓄水池" in info) or any(m in low for m in _GATEWAY_MARKERS)
 
 
 def _pid_info(pid: int) -> str:
@@ -2465,10 +2465,10 @@ if __name__ == "__main__":
         if sys.platform == "win32":
             import ctypes
             ctypes.windll.user32.MessageBoxW(
-                0, "网关客户端已在运行中，请勿重复启动。", "提示", 0x30
+                0, "模型蓄水池已在运行中，请勿重复启动。", "提示", 0x30
             )
         else:
-            logger.error("网关已在运行中，请勿重复启动。")
+            logger.error("模型蓄水池已在运行中，请勿重复启动。")
         sys.exit(0)
 
     # 自动找可用端口（锁拿到了才能安全改 config）
@@ -2572,7 +2572,7 @@ if __name__ == "__main__":
                 tray_icon = pystray.Icon(
                     "model-gateway",
                     create_tray_icon(),
-                    "无限额度监控网关",
+                    "模型蓄水池",
                     menu=pystray.Menu(
                         pystray.MenuItem("显示窗口", on_show, default=True),
                         pystray.MenuItem("退出", on_quit),
@@ -2585,7 +2585,7 @@ if __name__ == "__main__":
     if webview is None:
         # ---- headless：只跑服务，用浏览器访问 ----
         logger.info("Web UI: %s", url)
-        print(f"Model Gateway 已启动: {url}")
+        print(f"模型蓄水池已启动: {url}")
         if os.environ.get("GATEWAY_NO_BROWSER") != "1":
             try:
                 webbrowser.open(url)
@@ -2596,7 +2596,7 @@ if __name__ == "__main__":
 
     # ---- 创建窗口并直接加载页面 ----
     window = webview.create_window(
-        '无限额度监控网关', url, width=1200, height=800
+        '模型蓄水池', url, width=1200, height=800
     )
     state["window"] = window
 

@@ -30,14 +30,14 @@ jobs:
         run: python -m pytest tests/ -q
 
       - name: Build
-        run: pyinstaller --noconfirm --clean 网关客户端.spec
+        run: pyinstaller --noconfirm --clean 模型蓄水池.spec
 
       - name: Smoke test (Linux / macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
-          # 产物可能是 dist/vX.Y.Z-网关客户端 或 dist/ModelGateway.app/Contents/MacOS/*
+          # 产物可能是 dist/vX.Y.Z-模型蓄水池 或 dist/ModelReservoir.app/Contents/MacOS/*
           BIN=$(find dist -maxdepth 4 -type f -name 'v*' \
                 ! -name '*.exe' ! -name '*.md' ! -name '*.json' | head -1 || true)
           if [ -z "$BIN" ]; then
@@ -89,7 +89,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: model-gateway-${{ matrix.os }}
+          name: model-reservoir-${{ matrix.os }}
           path: dist/
           if-no-files-found: error
           retention-days: 14

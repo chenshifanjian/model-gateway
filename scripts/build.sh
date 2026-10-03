@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 跨平台打包脚本（Linux / macOS）。Windows 请用: pyinstaller 网关客户端.spec
+# 跨平台打包脚本（Linux / macOS）。Windows 请用: pyinstaller 模型蓄水池.spec
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,7 +28,7 @@ else
   echo "错误：需要 pip 或 uv 之一来安装依赖" >&2
   exit 1
 fi
-"$PYTHON" -m PyInstaller --noconfirm --clean 网关客户端.spec
+"$PYTHON" -m PyInstaller --noconfirm --clean 模型蓄水池.spec
 
 echo
 echo "打包完成，产物在 dist/:"

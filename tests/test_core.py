@@ -279,7 +279,9 @@ def test_page_diag_endpoint_oversize_rejected():
 def test_looks_like_gateway():
     assert app_module._looks_like_gateway("/home/u/.venv/bin/python app.py") is True
     assert app_module._looks_like_gateway("/opt/dist/v1.6.1-网关客户端") is True
+    assert app_module._looks_like_gateway("/opt/dist/v1.6.1-模型蓄水池") is True
     assert app_module._looks_like_gateway("C:\\app\\Model-Gateway.exe") is True
+    assert app_module._looks_like_gateway("C:\\app\\ModelReservoir.exe") is True
     assert app_module._looks_like_gateway("/usr/sbin/nginx: master process") is False
     assert app_module._looks_like_gateway("") is False
 
@@ -361,6 +363,6 @@ def test_kill_old_instance_win32_branch(monkeypatch):
         return _fake_cmds(cmd, **kw)
 
     monkeypatch.setattr(app_module.subprocess, "run", fake_run)
-    monkeypatch.setattr(app_module, "_pid_info", lambda pid: "网关客户端.exe")
+    monkeypatch.setattr(app_module, "_pid_info", lambda pid: "模型蓄水池.exe")
     assert app_module.kill_old_instance(8000) is True
     assert taskkilled and taskkilled[0][:2] == ["taskkill", "/PID"]
