@@ -13,7 +13,15 @@ if [ -z "${VIRTUAL_ENV:-}" ]; then
   PYTHON=python
 fi
 
-"$PYTHON" -m pip install -q -r requirements.txt pyinstaller
+# 依赖安装：venv 里可能没有 pip 模块（uv venv 默认不装），按 pip → uv 顺序降级
+if "$PYTHON" -m pip --version >/dev/null 2>&1; then
+  "$PYTHON" -m pip install -q -r requirements.txt pyinstaller
+elif command -v uv >/dev/null 2>&1; then
+  uv pip install -q --python "$PYTHON" -r requirements.txt pyinstaller
+else
+  echo "错误：需要 pip 或 uv 之一来安装依赖" >&2
+  exit 1
+fi
 "$PYTHON" -m PyInstaller --noconfirm --clean 网关客户端.spec
 
 echo
