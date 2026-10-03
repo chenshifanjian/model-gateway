@@ -6,7 +6,10 @@ import logging
 import hashlib
 import socket
 import threading
-import winreg
+try:
+    import winreg  # Windows-only; None on Linux/macOS
+except ImportError:
+    winreg = None
 import subprocess
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -919,7 +922,7 @@ async def index(request: Request):
         "local_api_key": LOCAL_API_KEY,
         "app_version": APP_VERSION,
     }
-    return templates.TemplateResponse("index.html", ctx)
+    return templates.TemplateResponse(request, "index.html", ctx)
 
 
 # ============================================================
@@ -2131,10 +2134,26 @@ async def update_port(request: Request, _=Depends(verify_admin)):
 # ============================================================
 STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 VALUE_NAME = "ModelGateway"
+# Linux: XDG autostart entry
+AUTOSTART_DESKTOP = Path.home() / ".config" / "autostart" / "model-gateway.desktop"
+
+
+def _autostart_desktop_content() -> str:
+    main_py = Path(__file__).resolve()
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Model Gateway\n"
+        f"Exec={sys.executable} {main_py}\n"
+        "X-GNOME-Autostart-enabled=true\n"
+        "NoDisplay=true\n"
+    )
 
 
 @app.get("/api/autostart")
 async def get_autostart(_=Depends(verify_admin)):
+    if winreg is None:
+        return {"enabled": AUTOSTART_DESKTOP.exists()}
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0,
                             winreg.KEY_READ)
@@ -2151,6 +2170,17 @@ async def get_autostart(_=Depends(verify_admin)):
 async def set_autostart(request: Request, _=Depends(verify_admin)):
     body = await request.json()
     enabled = bool(body.get("enabled", False))
+    if winreg is None:
+        try:
+            if enabled:
+                AUTOSTART_DESKTOP.parent.mkdir(parents=True, exist_ok=True)
+                AUTOSTART_DESKTOP.write_text(_autostart_desktop_content(),
+                                             encoding="utf-8")
+            elif AUTOSTART_DESKTOP.exists():
+                AUTOSTART_DESKTOP.unlink()
+            return {"ok": True, "enabled": enabled}
+        except Exception as e:
+            raise HTTPException(500, f"操作失败: {e}")
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0,
                             winreg.KEY_SET_VALUE)
@@ -2212,11 +2242,7 @@ async def proxy_models():
 
 if __name__ == "__main__":
     import uvicorn
-    import webview
     import time
-    from PIL import Image, ImageDraw
-    import pystray
-    import msvcrt
 
     # ---- 清理上次更新的残留文件 ----
     _cleanup_old_exe()
@@ -2231,7 +2257,22 @@ if __name__ == "__main__":
             s.settimeout(0.5)
             return s.connect_ex(("127.0.0.1", port)) == 0
 
-    def kill_old_instance(port: int):
+    def kill_old_instance(port: int) -> bool:
+        if sys.platform != "win32":
+            # Linux: find listener via `ss` and kill it
+            try:
+                out = subprocess.run(
+                    ["ss", "-ltnpH", f"sport = :{port}"],
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                import re as _re
+                m = _re.search(r"pid=(\d+)", out)
+                if m:
+                    os.kill(int(m.group(1)), 15)
+                    return True
+            except Exception:
+                pass
+            return False
         try:
             out = subprocess.run(
                 ["netstat", "-ano", "-p", "TCP"],
@@ -2267,12 +2308,20 @@ if __name__ == "__main__":
     LOCK_FILE = str(DATA_DIR / ".gateway.lock")
     try:
         _lock_fd = open(LOCK_FILE, "w")
-        msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        if sys.platform == "win32":
+            import msvcrt
+            msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, IOError):
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(
-            0, "网关客户端已在运行中，请勿重复启动。", "提示", 0x30
-        )
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, "网关客户端已在运行中，请勿重复启动。", "提示", 0x30
+            )
+        else:
+            logger.error("网关已在运行中，请勿重复启动。")
         sys.exit(0)
 
     # 自动找可用端口（锁拿到了才能安全改 config）
@@ -2282,58 +2331,6 @@ if __name__ == "__main__":
         atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2))
         if not AUTO_KILL:
             logger.info("端口 %d 被占用，自动使用 %d", desired_port, actual_port)
-
-    # ---- WebView2 环境检测（Win7 等旧系统自动安装） ----
-    _webview2_ok = False
-    try:
-        import webview.platforms.edgechromium
-        _webview2_ok = True
-    except Exception:
-        pass
-    if not _webview2_ok:
-        setup_exe = APP_DIR / "MicrosoftEdgeWebview2Setup.exe"
-        if setup_exe.exists():
-            logger.info("WebView2 未安装，开始静默安装...")
-            try:
-                subprocess.run(
-                    [str(setup_exe), "/silent", "/install"],
-                    capture_output=True, timeout=120,
-                )
-                logger.info("WebView2 安装完成")
-            except Exception:
-                logger.warning("WebView2 安装失败，尝试使用系统默认浏览器")
-
-    # ---- 生成托盘图标 ----
-    def create_tray_icon():
-        img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle([4, 4, 60, 60], radius=14, fill=(30, 144, 255))
-        draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
-        return img
-
-    state = {"window": None, "quitting": False}
-
-    def on_show(icon, item):
-        w = state["window"]
-        if w:
-            w.show()
-
-    def on_quit(icon, item):
-        state["quitting"] = True
-        icon.stop()
-        w = state["window"]
-        if w:
-            w.destroy()
-
-    tray_icon = pystray.Icon(
-        "model-gateway",
-        create_tray_icon(),
-        "无限额度监控网关",
-        menu=pystray.Menu(
-            pystray.MenuItem("显示窗口", on_show, default=True),
-            pystray.MenuItem("退出", on_quit),
-        ),
-    )
 
     # ---- FastAPI 服务器（daemon 线程） ----
     def start_server(port: int):
@@ -2348,8 +2345,91 @@ if __name__ == "__main__":
         if port_in_use(actual_port):
             break
 
-    # ---- 创建窗口并直接加载页面 ----
     url = f'http://127.0.0.1:{actual_port}/'
+
+    # ---- GUI 尝试（可选）：headless 请求 或 GUI 依赖缺失时走浏览器模式 ----
+    HEADLESS = (os.environ.get("GATEWAY_HEADLESS") == "1"
+                or "--headless" in sys.argv)
+
+    webview = None
+    tray_icon = None
+    state = {"window": None, "quitting": False}
+
+    if not HEADLESS:
+        # Windows: WebView2 环境检测（Win7 等旧系统自动安装）
+        if sys.platform == "win32":
+            _webview2_ok = False
+            try:
+                import webview.platforms.edgechromium  # noqa: F401
+                _webview2_ok = True
+            except Exception:
+                pass
+            if not _webview2_ok:
+                setup_exe = APP_DIR / "MicrosoftEdgeWebview2Setup.exe"
+                if setup_exe.exists():
+                    logger.info("WebView2 未安装，开始静默安装...")
+                    try:
+                        subprocess.run(
+                            [str(setup_exe), "/silent", "/install"],
+                            capture_output=True, timeout=120,
+                        )
+                        logger.info("WebView2 安装完成")
+                    except Exception:
+                        logger.warning("WebView2 安装失败，尝试使用系统默认浏览器")
+
+        try:
+            import webview
+            from PIL import Image, ImageDraw
+            import pystray
+
+            # ---- 生成托盘图标 ----
+            def create_tray_icon():
+                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rounded_rectangle([4, 4, 60, 60], radius=14,
+                                       fill=(30, 144, 255))
+                draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
+                return img
+
+            def on_show(icon, item):
+                w = state["window"]
+                if w:
+                    w.show()
+
+            def on_quit(icon, item):
+                state["quitting"] = True
+                icon.stop()
+                w = state["window"]
+                if w:
+                    w.destroy()
+
+            tray_icon = pystray.Icon(
+                "model-gateway",
+                create_tray_icon(),
+                "无限额度监控网关",
+                menu=pystray.Menu(
+                    pystray.MenuItem("显示窗口", on_show, default=True),
+                    pystray.MenuItem("退出", on_quit),
+                ),
+            )
+        except Exception as e:
+            logger.warning("GUI 不可用（%s），回退浏览器/headless 模式", e)
+            webview = None
+            tray_icon = None
+
+    if webview is None:
+        # ---- headless：只跑服务，用浏览器访问 ----
+        logger.info("Web UI: %s", url)
+        print(f"Model Gateway 已启动: {url}")
+        if os.environ.get("GATEWAY_NO_BROWSER") != "1":
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        while True:
+            time.sleep(3600)
+
+    # ---- 创建窗口并直接加载页面 ----
     window = webview.create_window(
         '无限额度监控网关', url, width=1200, height=800
     )
