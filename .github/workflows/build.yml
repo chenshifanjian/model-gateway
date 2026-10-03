@@ -63,8 +63,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # 注意：仓库里 dist/ 有 Git LFS 指针版 .exe（134B 文本），必须按体积过滤
           $bin = Get-ChildItem dist -Recurse -Filter '*.exe' |
-                 Where-Object { $_.Name -like 'v*' } | Select-Object -First 1
+                 Where-Object { $_.Name -like 'v*' -and $_.Length -gt 1MB } |
+                 Sort-Object Length -Descending | Select-Object -First 1
           if (-not $bin) { Write-Error 'built exe not found'; exit 1 }
           Write-Host "binary: $($bin.FullName)"
           $env:GATEWAY_HEADLESS = '1'
