@@ -143,23 +143,24 @@ body {
   background: rgba(40, 40, 40, 0.4);
 }
 
-.mac-controls {
-  display: flex;
-  gap: 8px;
-  position: absolute;
-  left: 20px;
-}
-
-.mac-btn {
-  width: 12px;
-  height: 12px;
+/* 弹窗关闭按钮：通用 × 形式（原 mac 红绿灯风格已去除） */
+.modal-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 18px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  border: 1px solid rgba(0,0,0,0.2);
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.2s, color 0.2s;
 }
-
-.mac-btn.close { background: #FF5F56; }
-.mac-btn.minimize { background: #FFBD2E; }
-.mac-btn.zoom { background: #27C93F; }
+.modal-close:hover {
+  background: rgba(255, 59, 48, 0.12);
+  color: var(--danger);
+}
 
 .mac-title {
   width: 100%;
@@ -708,11 +709,6 @@ input:checked + .slider:before { transform: translateX(14px); }
 
 <div class="mac-window">
   <div class="mac-titlebar">
-    <div class="mac-controls">
-      <div class="mac-btn close"></div>
-      <div class="mac-btn minimize"></div>
-      <div class="mac-btn zoom"></div>
-    </div>
     <div class="mac-title">模型监控 | Model Dashboard</div>
     <div style="position:absolute; right:16px; top:50%; transform:translateY(-50%); display:flex; align-items:center; gap:8px;">
       <label class="switch-inline" title="开机自动启动">
@@ -887,7 +883,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width: 500px;">
     <div class="modal-header">
       <div class="modal-title">📦 本地输出模型管理</div>
-      <div class="mac-btn close" onclick="document.getElementById('outputModelsModal').classList.remove('show')" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="document.getElementById('outputModelsModal').classList.remove('show')" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
       <p style="margin-top:0; font-size: 13px; color: var(--text-secondary);">以下模型名称由本网关自动聚合生成，您可以在第三方工具中直接使用它们。</p>
@@ -904,7 +900,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width: 600px;">
     <div class="modal-header">
       <div class="modal-title">🔀 自定义路由配置</div>
-      <div class="mac-btn close" onclick="document.getElementById('routerModal').classList.remove('show')" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="document.getElementById('routerModal').classList.remove('show')" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
       <div style="display:flex; gap:8px; margin-bottom:12px;">
@@ -927,7 +923,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width: 800px; height: 80vh; display:flex; flex-direction:column;">
     <div class="modal-header">
       <div class="modal-title">📢 系统公告</div>
-      <div class="mac-btn close" onclick="closeFeishuModal()" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="closeFeishuModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-body" style="flex:1; padding:24px; overflow-y:auto;">
       <div id="announcementMeta" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--mac-border);font-size:12px;color:var(--text-secondary);"></div>
@@ -962,7 +958,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width:480px;">
     <div class="modal-header">
       <div class="modal-title" id="updateTitle">🔔 发现新版本</div>
-      <div class="mac-btn close" onclick="closeUpdateModal()" style="cursor:pointer;"></div>
+      <button type="button" class="modal-close" onclick="closeUpdateModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-body" style="padding:20px 24px;">
       <div id="updateBody">
@@ -987,7 +983,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content">
     <div class="modal-header">
       <div class="modal-title" id="modalTitle">管理模型</div>
-      <div class="mac-btn close" onclick="closeModelManager()" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="closeModelManager()" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
       <div style="margin-bottom: 12px; display: flex; gap: 8px; justify-content: space-between; align-items: center;">
@@ -1016,7 +1012,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width: 480px;">
     <div class="modal-header">
       <div class="modal-title" id="providerModalTitle">添加提供商</div>
-      <div class="mac-btn close" onclick="closeProviderEditor()" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="closeProviderEditor()" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
       <div class="form-field">
@@ -1057,7 +1053,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width: 660px;">
     <div class="modal-header">
       <div class="modal-title">⚡ 一键配置</div>
-      <div class="mac-btn close" onclick="closePresetModal()" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="closePresetModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-body" id="presetBody">
       <div style="text-align:center; padding: 24px; color: var(--text-secondary);">加载预设中…</div>
@@ -1078,7 +1074,7 @@ input:checked + .slider:before { transform: translateX(14px); }
   <div class="modal-content" style="max-width: 620px;">
     <div class="modal-header">
       <div class="modal-title">🖼️ 识图配置</div>
-      <div class="mac-btn close" onclick="closeVisionConfig()" style="cursor: pointer;"></div>
+      <button type="button" class="modal-close" onclick="closeVisionConfig()" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px; margin-bottom:14px; border:1px solid var(--mac-border); border-radius:8px; background:var(--mac-border);">
