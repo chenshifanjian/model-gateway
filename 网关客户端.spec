@@ -1,18 +1,35 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 import re
+import sys
 
 # 从 app.py 读取版本号，自动生成带版本号的 exe 名（如 v1.5.0-网关客户端）
 with open('app.py', encoding='utf-8') as _f:
     _ver = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', _f.read()).group(1)
 EXE_NAME = f'v{_ver}-网关客户端'
 
+IS_WIN = sys.platform == "win32"
+
+# 跨平台：数据文件与隐藏导入按平台裁剪
+_datas = [('templates', 'templates'), ('models_meta.json', '.')]
+if IS_WIN and os.path.exists('MicrosoftEdgeWebview2Setup.exe'):
+    _datas.append(('MicrosoftEdgeWebview2Setup.exe', '.'))
+
+_hiddenimports = ['PIL', 'PIL._tkinter_finder']
+if IS_WIN:
+    _hiddenimports.append('pystray._win32')
+elif sys.platform == "darwin":
+    _hiddenimports.append('pystray._darwin')
+else:
+    _hiddenimports.append('pystray._appindicator')
+
 
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('models_meta.json', '.'), ('MicrosoftEdgeWebview2Setup.exe', '.')],
-    hiddenimports=['pystray._win32', 'PIL', 'PIL._tkinter_finder'],
+    datas=_datas,
+    hiddenimports=_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -42,3 +59,11 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        exe,
+        name="ModelGateway.app",
+        icon=None,
+        bundle_identifier="com.modelgateway.client",
+    )

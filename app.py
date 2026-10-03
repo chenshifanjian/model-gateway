@@ -43,7 +43,12 @@ import sys
 
 if getattr(sys, 'frozen', False):
     APP_DIR = Path(sys._MEIPASS)
-    DATA_DIR = Path(sys.executable).parent
+    if sys.platform == "darwin":
+        # macOS: .app bundle 内不可写，数据放 Application Support
+        DATA_DIR = Path.home() / "Library" / "Application Support" / "ModelGateway"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    else:
+        DATA_DIR = Path(sys.executable).parent
 else:
     APP_DIR = Path(__file__).parent
     # 开发模式支持环境变量 GATEWAY_DATA_DIR 指向真实数据目录（如 dist/）
@@ -1311,6 +1316,9 @@ async def download_progress(_=Depends(verify_admin)):
 @app.post("/api/apply-update")
 async def apply_update(_=Depends(verify_admin)):
     """应用更新：替换 exe 并重启"""
+    if sys.platform != "win32":
+        return {"ok": False,
+                "error": "在线热更新仅限 Windows 客户端，请手动更新（git pull / 重新下载）"}
     if not getattr(sys, 'frozen', False):
         return {"ok": False, "error": "开发模式下不支持热更新，请打包后使用"}
     if not _update_download_state["done"] or not _update_download_state["file"]:
@@ -2150,8 +2158,41 @@ def _autostart_desktop_content() -> str:
     )
 
 
+# macOS: LaunchAgent plist
+LAUNCH_PLIST = (Path.home() / "Library" / "LaunchAgents"
+                / "com.modelgateway.client.plist")
+
+
+def _autostart_plist_content() -> str:
+    if getattr(sys, 'frozen', False):
+        prog = f"    <string>{sys.executable}</string>\n"
+        args = ""
+    else:
+        prog = f"    <string>{sys.executable}</string>\n"
+        args = f"    <string>{Path(__file__).resolve()}</string>\n"
+    return (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+        "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\">\n"
+        "<dict>\n"
+        "  <key>Label</key>\n"
+        "  <string>com.modelgateway.client</string>\n"
+        "  <key>ProgramArguments</key>\n"
+        "  <array>\n"
+        f"{prog}{args}"
+        "  </array>\n"
+        "  <key>RunAtLoad</key>\n"
+        "  <true/>\n"
+        "</dict>\n"
+        "</plist>\n"
+    )
+
+
 @app.get("/api/autostart")
 async def get_autostart(_=Depends(verify_admin)):
+    if sys.platform == "darwin":
+        return {"enabled": LAUNCH_PLIST.exists()}
     if winreg is None:
         return {"enabled": AUTOSTART_DESKTOP.exists()}
     try:
@@ -2170,6 +2211,24 @@ async def get_autostart(_=Depends(verify_admin)):
 async def set_autostart(request: Request, _=Depends(verify_admin)):
     body = await request.json()
     enabled = bool(body.get("enabled", False))
+    if sys.platform == "darwin":
+        try:
+            if enabled:
+                LAUNCH_PLIST.parent.mkdir(parents=True, exist_ok=True)
+                LAUNCH_PLIST.write_text(_autostart_plist_content(),
+                                        encoding="utf-8")
+                subprocess.run(["launchctl", "unload", str(LAUNCH_PLIST)],
+                               capture_output=True, timeout=15)
+                subprocess.run(["launchctl", "load", "-w", str(LAUNCH_PLIST)],
+                               capture_output=True, timeout=15)
+            else:
+                subprocess.run(["launchctl", "unload", "-w", str(LAUNCH_PLIST)],
+                               capture_output=True, timeout=15)
+                if LAUNCH_PLIST.exists():
+                    LAUNCH_PLIST.unlink()
+            return {"ok": True, "enabled": enabled}
+        except Exception as e:
+            raise HTTPException(500, f"操作失败: {e}")
     if winreg is None:
         try:
             if enabled:
@@ -2258,6 +2317,21 @@ if __name__ == "__main__":
             return s.connect_ex(("127.0.0.1", port)) == 0
 
     def kill_old_instance(port: int) -> bool:
+        if sys.platform == "darwin":
+            # macOS: find listener via `lsof` and kill it
+            try:
+                out = subprocess.run(
+                    ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                    capture_output=True, text=True, timeout=10,
+                ).stdout
+                for line in out.splitlines():
+                    pid = int(line.strip())
+                    if pid and pid != os.getpid():
+                        os.kill(pid, 15)
+                        return True
+            except Exception:
+                pass
+            return False
         if sys.platform != "win32":
             # Linux: find listener via `ss` and kill it
             try:
