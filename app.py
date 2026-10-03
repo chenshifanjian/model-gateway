@@ -2385,7 +2385,7 @@ def kill_old_instance(port: int) -> bool:
         try:
             out = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
                                  capture_output=True, text=True, timeout=10).stdout
-            pids = [int(x) for x in out.split() if x.strip().isdigit()]
+            pids = [int(x) for x in out.splitlines() if x.strip().isdigit()]  # 一 pid 一行，整行纯数字才算
         except Exception:
             return False
     elif sys.platform != "win32":

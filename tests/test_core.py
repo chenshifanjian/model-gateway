@@ -306,6 +306,7 @@ def _fake_ss(*_a, **_k):
 
 def test_kill_old_instance_spares_strangers(monkeypatch):
     import os as _os
+    monkeypatch.setattr(app_module.sys, "platform", "linux")  # 钉死 ss 分支，三平台同一逻辑
     killed = []
     monkeypatch.setattr(app_module.subprocess, "run", _fake_ss)
     monkeypatch.setattr(app_module, "_pid_info", lambda pid: "nginx worker process")
@@ -316,9 +317,50 @@ def test_kill_old_instance_spares_strangers(monkeypatch):
 
 def test_kill_old_instance_kills_gateway(monkeypatch):
     import os as _os
+    monkeypatch.setattr(app_module.sys, "platform", "linux")  # 钉死 ss 分支，三平台同一逻辑
     killed = []
     monkeypatch.setattr(app_module.subprocess, "run", _fake_ss)
     monkeypatch.setattr(app_module, "_pid_info", lambda pid: "/u/.venv/bin/python app.py")
     monkeypatch.setattr(_os, "kill", lambda pid, sig: killed.append((pid, sig)))
     assert app_module.kill_old_instance(8000) is True
     assert killed == [(7777, 15)]  # 只杀网关本体，SIGTERM
+
+
+def _fake_cmds(cmd, **kw):
+    """按命令返回三平台各自的探测输出。"""
+    class R:
+        stdout = ""
+    out = R()
+    if cmd[0] == "lsof":          # macOS: 一 pid 一行
+        out.stdout = "7777\n"
+    elif cmd[0] == "ss":          # Linux: ss -ltnpH
+        out.stdout = 'LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:* users:(("x",pid=7777,fd=5))'
+    elif cmd[0] == "netstat":     # Windows: netstat -ano
+        out.stdout = "  TCP    0.0.0.0:8000            0.0.0.0:0              LISTENING       7777"
+    return out
+
+
+def test_kill_old_instance_darwin_branch(monkeypatch):
+    import os as _os
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    killed = []
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_cmds)
+    monkeypatch.setattr(app_module, "_pid_info", lambda pid: "python app.py")
+    monkeypatch.setattr(_os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    assert app_module.kill_old_instance(8000) is True
+    assert killed == [(7777, 15)]
+
+
+def test_kill_old_instance_win32_branch(monkeypatch):
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+    taskkilled = []
+
+    def fake_run(cmd, **kw):
+        if cmd[0] == "taskkill":
+            taskkilled.append(cmd)
+        return _fake_cmds(cmd, **kw)
+
+    monkeypatch.setattr(app_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(app_module, "_pid_info", lambda pid: "网关客户端.exe")
+    assert app_module.kill_old_instance(8000) is True
+    assert taskkilled and taskkilled[0][:2] == ["taskkill", "/PID"]
