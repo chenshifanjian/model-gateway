@@ -23,6 +23,22 @@ elif sys.platform == "darwin":
 else:
     _hiddenimports.append('pystray._appindicator')
 
+# ---- Linux GUI：把 gi 类型库(Gtk/WebKit2 等)打进包，运行时钩子设 GI_TYPELIB_PATH ----
+# 依赖目标机器装有 webkit2gtk-4.1（类型库加载的是系统 .so，不打进包内）
+_runtime_hooks = []
+if sys.platform.startswith('linux'):
+    _gir_dirs = ['/usr/lib/girepository-1.0', '/usr/lib64/girepository-1.0']
+    _gir = next((d for d in _gir_dirs if os.path.isdir(d)), None)
+    if _gir:  # 没有类型库目录（如 CI 的精简容器）就退回 headless 模式
+        _datas.append((_gir, 'gi/girepository-1.0'))
+        _runtime_hooks.append('packaging/rthook_gi_typelib.py')
+        _hiddenimports += [
+            'gi', 'gi.repository',
+            'gi.repository.GLib', 'gi.repository.GObject', 'gi.repository.Gio',
+            'gi.repository.Gdk', 'gi.repository.Gtk', 'gi.repository.WebKit2',
+            'pywebview', 'pywebview.platforms.gtk',
+        ]
+
 
 a = Analysis(
     ['app.py'],
@@ -32,7 +48,7 @@ a = Analysis(
     hiddenimports=_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=_runtime_hooks,
     excludes=['PySide6', 'shiboken6', 'numpy', 'matplotlib', 'scipy', 'pandas', 'PIL._tkinter_finder', 'tkinter', 'unittest', 'test', 'pytest', 'setuptools', 'pkg_resources', 'xmlrpc', 'ensurepip', 'lib2to3'],
     noarchive=False,
     optimize=0,

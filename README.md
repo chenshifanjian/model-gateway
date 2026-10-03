@@ -75,7 +75,9 @@ python app.py
 pyinstaller 网关客户端.spec
 ```
 
-spec 文件按平台自动裁剪：Windows 打进 WebView2 安装器与 win32 托盘，macOS 额外产出 `ModelGateway.app`，Linux 使用 appindicator 托盘。
+spec 文件按平台自动裁剪：Windows 打进 WebView2 安装器与 win32 托盘，macOS 额外产出 `ModelGateway.app`。
+
+Linux：`build.sh` 优先用 `.venv-gui`（系统 Python + `--system-site-packages`）打包，spec 检测到本机 gi 类型库就把 Gtk/WebKit2 类型库打进包 → **产物自带原生窗口**（目标机需装 `webkit2gtk-4.1`）；没有 gi 环境则回退 headless 版（浏览器访问）。Linux 系统托盘默认关闭（pystray GTK 与 pywebview 抢主循环会崩）。
 
 ## 测试
 

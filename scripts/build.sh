@@ -6,10 +6,16 @@ cd "$(dirname "$0")/.."
 PYTHON="${PYTHON:-python3}"
 
 # PEP 668（Arch/Debian 等系统 Python 禁止裸 pip）：没在 venv 里就自动建/用 .venv
+# 有 .venv-gui（系统 Python + gi/WebKit2，见指南"坑"）就用它 → 产物带原生窗口；
+# 否则回退普通 .venv → 产物 headless（浏览器访问）
 if [ -z "${VIRTUAL_ENV:-}" ]; then
-  [ -d .venv ] || "$PYTHON" -m venv .venv
-  # shellcheck disable=SC1091
-  source .venv/bin/activate
+  if [ -d .venv-gui ]; then
+    source .venv-gui/bin/activate
+  else
+    [ -d .venv ] || "$PYTHON" -m venv .venv
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+  fi
   PYTHON=python
 fi
 
