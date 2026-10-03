@@ -943,6 +943,18 @@ async def index(request: Request):
 # ============================================================
 # 管理接口（admin 鉴权）
 # ============================================================
+@app.post("/api/page-diag")
+async def page_diag(request: Request):
+    """前端自诊断回传：记录 UI 状态/JS 错误到日志（仅 localhost，≤4KB，无敏感数据）。
+    窗口内的 JS 问题（按钮点了没反应等）靠它定位——共享 localStorage 会被探针覆盖，不可靠。"""
+    try:
+        body = (await request.body())[:4096].decode("utf-8", "replace").replace("\n", " ")
+        logger.info("PAGE-DIAG %s", body)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @app.get("/api/poll-status")
 async def poll_status(_=Depends(verify_admin)):
     return {
@@ -2552,5 +2564,8 @@ if __name__ == "__main__":
         threading.Thread(target=tray_icon.run, daemon=True).start()
 
     # ---- 启动 webview ----
-    webview.start()
+    # private_mode 是 pywebview5 的默认值，但会禁用 localStorage/cookies
+    # （gtk.py: enable_html5_local_storage=False）→ 主题偏好、页面自诊断全挂，
+    # 表现为"点主题按钮没反应/不跟随系统"。本应用需要持久化 UI 偏好 → 关掉。
+    webview.start(private_mode=False)
 

@@ -666,12 +666,33 @@ input:checked + .slider:before { transform: translateX(14px); }
 </head>
 <body>
 <script>
+  // ---- 早期自诊断：状态/错误直接回传服务端日志（独立小块，主脚本挂了也还在） ----
+  window.reportDiag = function (kind, extra) {
+    try {
+      var p = { kind: kind, t: Date.now() };
+      if (extra) for (var k in extra) p[k] = extra[k];
+      fetch('/api/page-diag', { method: 'POST', body: JSON.stringify(p) }).catch(function () {});
+    } catch (_) {}
+  };
+  window.addEventListener('error', function (e) {
+    reportDiag('js-error', { msg: String(e.message), line: e.lineno, file: String(e.filename || '').split('/').pop() });
+  });
   // 主题三态：auto(默认，跟随系统) / light / dark —— 首帧前先应用，避免闪白/闪黑
   (function () {
-    var pref = localStorage.getItem('theme') || 'auto';
-    var dark = pref === 'dark' ||
-      (pref === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    var pref = null, mqlDark = null, mqAdd = null;
+    try { pref = localStorage.getItem('theme') || 'auto'; } catch (e) { reportDiag('ls-error', { msg: String(e.message) }); }
+    try {
+      var mq = matchMedia('(prefers-color-scheme: dark)');
+      mqlDark = mq.matches;
+      mqAdd = typeof mq.addEventListener;
+    } catch (e) { reportDiag('mql-error', { msg: String(e.message) }); }
+    var dark = pref === 'dark' || (pref === 'auto' && mqlDark === true);
     if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+    reportDiag('boot', {
+      pref: pref, mqlDark: mqlDark, mqAdd: mqAdd, dataTheme: dark ? 'dark' : null,
+      modalOpen: !!document.querySelector('.modal-overlay.show'),
+      ver: 'ui-' + Date.now()
+    });
   })();
 </script>
 
@@ -1147,10 +1168,28 @@ function toggleTheme() {
   applyTheme();
 }
 // 系统主题实时联动（auto 模式下切系统深浅色立即生效）
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
-  if ((localStorage.getItem('theme') || 'auto') === 'auto') applyTheme();
-});
-document.addEventListener('DOMContentLoaded', applyTheme);
+// 兼容老 WebKit：只有 addListener；两个 API 都没有就上报——这正是"点了没反应"类问题的定位点
+(function () {
+  var mq = matchMedia('(prefers-color-scheme: dark)');
+  var onChange = function () {
+    if ((localStorage.getItem('theme') || 'auto') === 'auto') applyTheme();
+  };
+  if (mq.addEventListener) mq.addEventListener('change', onChange);
+  else if (mq.addListener) mq.addListener(onChange);
+  else reportDiag('mql-unsupported', {});
+})();
+// DOMContentLoaded 可能已经过去（脚本晚执行）→ readyState 兜底，保证图标/状态一定刷新
+function _themeReady() {
+  applyTheme();
+  reportDiag('theme-ready', {
+    pref: localStorage.getItem('theme'),
+    dt: document.documentElement.getAttribute('data-theme'),
+    icon: (document.getElementById('themeBtn') || {}).textContent,
+    menu: typeof openThemeMenu
+  });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _themeReady);
+else _themeReady();
 
 /* ============ 自诊断（写 localStorage，探针或 DevTools 读取） ============
    注意：勿用 SIGUSR1 —— JavaScriptCore 占用它做 GC 并覆盖处理器，会杀进程 */
@@ -1224,6 +1263,11 @@ function _csPlaceMenu(menu, btn) {
 }
 /* 主题三选菜单：跟随系统 / 浅色 / 深色（替代无感的循环切换） */
 function openThemeMenu(btn) {
+  reportDiag('theme-click', {
+    pref: localStorage.getItem('theme'),
+    modalOpen: !!document.querySelector('.modal-overlay.show'),
+    hitBtn: (document.elementFromPoint(btn.getBoundingClientRect().x + 17, btn.getBoundingClientRect().y + 17) || {}).id
+  });
   const wasMine = _csOpenMenu && _csOpenMenu._isThemeMenu;
   closeCsMenu();
   if (wasMine) return;
