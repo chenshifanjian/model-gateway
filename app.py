@@ -960,6 +960,13 @@ def page_diag_dedup(text: str, now: float) -> bool:
     return True
 
 
+@app.post("/api/activate")
+def api_activate():
+    """（同机单实例）第二实例启动时调用：把本实例窗口带到前台。
+    与 page-diag 同级 localhost 无鉴权——本机同用户进程即可调用，不泄露数据。"""
+    return {"ok": present_window_best_effort()}
+
+
 @app.post("/api/page-diag")
 async def page_diag(request: Request):
     """前端自诊断回传：记录 UI 状态/JS 错误到日志（仅 localhost，≤4KB，无敏感数据）。
@@ -2420,6 +2427,322 @@ def kill_old_instance(port: int) -> bool:
     return False
 
 
+# ==== 单实例 + Linux SNI 托盘（模块级） ====
+
+GUI = {"window": None, "quitting": False}
+# 供 FastAPI 路由 / 第二实例激活使用；main() 内的 state 与它是同一个 dict。
+
+
+def single_instance_lock_path() -> Path:
+    """跨启动方式唯一的实例锁路径。
+    不能放 DATA_DIR：源码跑（仓库目录）与打包跑（exe 目录）DATA_DIR 不同，
+    各锁各的 → 双开。XDG_RUNTIME_DIR 是 per-user 会话目录，重启自动清理。"""
+    if sys.platform == "linux":
+        base = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/runtime-{os.getuid()}"
+    else:
+        import tempfile
+        base = tempfile.gettempdir()
+    path = Path(base) / "model-reservoir.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def image_to_argb(image) -> tuple:
+    """PIL Image → (w, h, ARGB 大端字节)：SNI IconPixmap 载荷。纯函数可测。"""
+    image = image.convert("RGBA")
+    w, h = image.size
+    raw = image.tobytes()
+    out = bytearray(len(raw))
+    out[0::4] = raw[3::4]  # A
+    out[1::4] = raw[0::4]  # R
+    out[2::4] = raw[1::4]  # G
+    out[3::4] = raw[2::4]  # B
+    return w, h, bytes(out)
+
+
+def activate_running_instance(port: int) -> bool:
+    """通知已在运行的实例把窗口带到前台（POST /api/activate，2 秒超时）。"""
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/activate",
+            data=b"{}", headers={"Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.info("激活已有实例失败: %s", e)
+        return False
+
+
+def notify_running_instance(port: int) -> None:
+    """激活失败时的兜底提醒（Linux notify-send，尽力而为，失败静默）。"""
+    if sys.platform != "linux":
+        return
+    import shutil as _shutil
+    if not _shutil.which("notify-send"):
+        return
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "模型蓄水池", "模型蓄水池已在运行",
+             f"已尝试唤起窗口（端口 {port}），也可从任务栏/托盘切回"],
+            capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+
+def _niri_focus_our_window() -> None:
+    """niri：按 pid 精确聚焦本进程窗口（跨 workspace 跳转）。独立线程，不卡主循环。"""
+    import shutil as _shutil
+    if not _shutil.which("niri"):
+        return
+
+    def _worker():
+        try:
+            out = subprocess.run(
+                ["niri", "msg", "-j", "windows"],
+                capture_output=True, timeout=2, text=True, check=True)
+            for item in json.loads(out.stdout or "[]"):
+                if item.get("pid") == os.getpid():
+                    subprocess.run(
+                        ["niri", "msg", "action", "focus-window",
+                         "--id", str(item["id"])],
+                        capture_output=True, timeout=2)
+                    return
+        except Exception as e:
+            logger.debug("niri 聚焦失败: %s", e)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def present_window_best_effort() -> bool:
+    """把本实例窗口带到前台：niri IPC 按 pid 聚焦 + GTK present 兜底。
+    可从任意线程调用（内部 idle_add 调度到主循环）。"""
+    w = GUI.get("window")
+    if w is None:
+        return False
+
+    def _do():
+        try:
+            w.show()
+        except Exception as e:
+            logger.debug("窗口 show 失败: %s", e)
+        _niri_focus_our_window()
+        try:
+            import gi
+            gi.require_version("Gtk", "3.0")
+            from gi.repository import Gtk
+            for tw in Gtk.Window.list_toplevels():
+                if tw.get_visible():
+                    tw.present()
+        except Exception as e:
+            logger.debug("GTK present 失败: %s", e)
+        return False
+
+    try:
+        from gi.repository import GLib
+        GLib.idle_add(_do)
+        return True
+    except Exception as e:
+        logger.info("窗口唤起调度失败: %s", e)
+        return False
+
+
+def _quit_from_tray() -> None:
+    """托盘菜单『退出』：置 quitting（放行关窗）并销毁窗口 → 进程退出。"""
+    GUI["quitting"] = True
+    w = GUI.get("window")
+    if w is not None:
+        try:
+            w.destroy()
+        except Exception as e:
+            logger.debug("退出销毁窗口失败: %s", e)
+
+
+def start_linux_tray(title: str, image) -> bool:
+    """Linux 托盘：纯 DBus StatusNotifierItem + com.canonical.dbusmenu 右键菜单。
+    不用 pystray——其 GTK 后端与 pywebview 抢 GLib 主循环（g_application_run
+    CRITICAL → 历史 SIGSEGV）。DBusGMainLoop 把 method call 挂 default main
+    context，由 pywebview 的 GTK 主循环统一 dispatch，无第二主循环。
+    quickshell/DMS 官方支持 dbusmenu（commit 'add DBusMenu support'）。
+    返回是否注册成功。"""
+    try:
+        import gi
+        gi.require_version("GLib", "2.0")
+        from gi.repository import GLib  # noqa: F401  (确保 loop 依赖就位)
+        import dbus
+        import dbus.service
+        from dbus.mainloop.glib import DBusGMainLoop
+
+        DBusGMainLoop(set_as_default=True)
+        bus = dbus.SessionBus()
+        own_name = f"org.kde.StatusNotifierItem-{os.getpid()}-1"
+        bus.request_name(own_name)
+
+        w_px, h_px, argb = image_to_argb(image)
+        pixmap = dbus.Array(
+            [dbus.Struct((w_px, h_px, dbus.ByteArray(argb)),
+                         signature="(iiay)")],
+            signature="(iiay)")
+
+        class _SNI(dbus.service.Object):
+            def __init__(self, bus, path):
+                super().__init__(bus, path)
+
+            @dbus.service.method("org.freedesktop.DBus.Properties",
+                                 in_signature="ss", out_signature="v")
+            def Get(self, interface, prop):
+                return self._props()[prop]
+
+            @dbus.service.method("org.freedesktop.DBus.Properties",
+                                 in_signature="s", out_signature="a{sv}")
+            def GetAll(self, interface):
+                return self._props()
+
+            def _props(self):
+                return {
+                    "Id": dbus.String("model-reservoir", variant_level=1),
+                    "Category": dbus.String("ApplicationStatus", variant_level=1),
+                    "Title": dbus.String(title, variant_level=1),
+                    "Status": dbus.String("Active", variant_level=1),
+                    "IconName": dbus.String("", variant_level=1),
+                    "IconThemePath": dbus.String("", variant_level=1),
+                    "IconPixmap": pixmap,
+                    "Menu": dbus.ObjectPath("/MenuBar", variant_level=1),
+                    "WindowId": dbus.UInt32(0, variant_level=1),
+                    "ItemIsMenu": dbus.Boolean(False, variant_level=1),
+                }
+
+            @dbus.service.method("org.kde.StatusNotifierItem",
+                                 in_signature="ii", out_signature="")
+            def Activate(self, x, y):
+                present_window_best_effort()
+
+            @dbus.service.method("org.kde.StatusNotifierItem",
+                                 in_signature="ii", out_signature="")
+            def SecondaryActivate(self, x, y):
+                present_window_best_effort()
+
+            @dbus.service.method("org.kde.StatusNotifierItem",
+                                 in_signature="ii", out_signature="")
+            def ContextMenu(self, x, y):
+                present_window_best_effort()
+
+        class _DBusMenu(dbus.service.Object):
+            def __init__(self, bus, path):
+                super().__init__(bus, path)
+
+            def _node(self, nid, props, children=()):
+                kids = []
+                for cid, cprops, cchildren in children:
+                    kids.append(self._node(cid, cprops, cchildren))
+                return dbus.Struct(
+                    (nid,
+                     dbus.Dictionary(props, signature="sv"),
+                     dbus.Array(kids, signature="v")),
+                    signature="ia{sv}av",
+                    variant_level=1 if nid else 0)
+
+            def _layout(self):
+                menu = (
+                    (1, {"label": dbus.String("显示窗口", variant_level=1),
+                         "enabled": dbus.Boolean(True, variant_level=1)}, ()),
+                    (2, {"type": dbus.String("separator", variant_level=1)}, ()),
+                    (3, {"label": dbus.String("退出", variant_level=1),
+                         "enabled": dbus.Boolean(True, variant_level=1)}, ()),
+                )
+                root = dbus.Struct(
+                    (0,
+                     dbus.Dictionary({"children-display":
+                                      dbus.String("submenu", variant_level=1)},
+                                     signature="sv"),
+                     dbus.Array([self._node(*c) for c in menu],
+                                signature="v")),
+                    signature="ia{sv}av")
+                return dbus.UInt32(1), root
+
+            @dbus.service.method("com.canonical.dbusmenu",
+                                 in_signature="iias", out_signature="u(ia{sv}av)")
+            def GetLayout(self, parentId, recursionDepth, propertyNames):
+                return self._layout()
+
+            @dbus.service.method("com.canonical.dbusmenu",
+                                 in_signature="ias", out_signature="a(ia{sv})")
+            def GetGroupProperties(self, ids, propertyNames):
+                props = {
+                    0: {"children-display": "submenu"},
+                    1: {"label": "显示窗口", "enabled": True},
+                    2: {"type": "separator"},
+                    3: {"label": "退出", "enabled": True},
+                }
+                out = []
+                for i in ids:
+                    i = int(i)
+                    d = {}
+                    for k, v in props.get(i, {}).items():
+                        if isinstance(v, bool):
+                            d[k] = dbus.Boolean(v, variant_level=1)
+                        elif isinstance(v, str):
+                            d[k] = dbus.String(v, variant_level=1)
+                    out.append(dbus.Struct((i, dbus.Dictionary(d, signature="sv"))))
+                return out
+
+            @dbus.service.method("com.canonical.dbusmenu",
+                                 in_signature="isvu", out_signature="")
+            def Event(self, id, eventId, data, timestamp):
+                if eventId == "clicked":
+                    if id == 1:
+                        present_window_best_effort()
+                    elif id == 3:
+                        _quit_from_tray()
+
+            @dbus.service.method("com.canonical.dbusmenu",
+                                 in_signature="a(isvu)", out_signature="ai")
+            def EventGroup(self, events):
+                return dbus.Array([], signature="i")
+
+            @dbus.service.method("com.canonical.dbusmenu",
+                                 in_signature="i", out_signature="b")
+            def AboutToShow(self, id):
+                return False
+
+            @dbus.service.method("com.canonical.dbusmenu",
+                                 in_signature="ai", out_signature="aiai")
+            def AboutToShowGroup(self, ids):
+                return [], []
+
+            @dbus.service.method("org.freedesktop.DBus.Properties",
+                                 in_signature="ss", out_signature="v")
+            def Get(self, interface, prop):
+                return self._menu_props()[prop]
+
+            @dbus.service.method("org.freedesktop.DBus.Properties",
+                                 in_signature="s", out_signature="a{sv}")
+            def GetAll(self, interface):
+                return self._menu_props()
+
+            def _menu_props(self):
+                return {
+                    "Version": dbus.UInt32(4, variant_level=1),
+                    "TextDirection": dbus.String("ltr", variant_level=1),
+                    "Status": dbus.String("normal", variant_level=1),
+                    "IconThemePath": dbus.Array([], signature="s",
+                                                variant_level=1),
+                }
+
+        _SNI(bus, "/StatusNotifierItem")
+        _DBusMenu(bus, "/MenuBar")
+        watcher = bus.get_object("org.kde.StatusNotifierWatcher",
+                                 "/StatusNotifierWatcher")
+        watcher.RegisterStatusNotifierItem(own_name)
+        return True
+    except Exception as e:
+        logger.warning("SNI 托盘不可用（%s）", e)
+        return False
+
+# ==== 单实例 + Linux SNI 托盘 结束 ====
+
+
 if __name__ == "__main__":
     import uvicorn
     import time
@@ -2445,31 +2768,38 @@ if __name__ == "__main__":
         raise RuntimeError(f"端口 {start}~{start + max_try - 1} 全部被占用，无法启动")
 
     # ---- 单实例限制（文件锁要最先，避免 config 被污染） ----
+    # 锁放 XDG_RUNTIME_DIR：跨启动方式唯一（DATA_DIR 锁会让源码跑/打包跑
+    # 各锁各的 → 双开）。GATEWAY_ALLOW_MULTI=1 放行多实例（多配置并存/测试）。
     AUTO_KILL = os.environ.get("GATEWAY_AUTO_KILL") == "1"
+    ALLOW_MULTI = os.environ.get("GATEWAY_ALLOW_MULTI") == "1"
 
     # 如果是测试模式自动杀旧实例，先杀再拿锁
     if AUTO_KILL and port_in_use(desired_port):
         kill_old_instance(desired_port)
         time.sleep(1.5)
 
-    LOCK_FILE = str(DATA_DIR / ".gateway.lock")
-    try:
-        _lock_fd = open(LOCK_FILE, "w")
-        if sys.platform == "win32":
-            import msvcrt
-            msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, IOError):
-        if sys.platform == "win32":
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(
-                0, "模型蓄水池已在运行中，请勿重复启动。", "提示", 0x30
-            )
-        else:
-            logger.error("模型蓄水池已在运行中，请勿重复启动。")
-        sys.exit(0)
+    _lock_fd = None
+    if not ALLOW_MULTI:
+        LOCK_FILE = str(single_instance_lock_path())
+        try:
+            _lock_fd = open(LOCK_FILE, "w")
+            if sys.platform == "win32":
+                import msvcrt
+                msvcrt.locking(_lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, IOError):
+            logger.error("模型蓄水池已在运行中（锁 %s），尝试唤起已有窗口", LOCK_FILE)
+            _activated = activate_running_instance(desired_port)
+            if not _activated:
+                notify_running_instance(desired_port)
+                if sys.platform == "win32":
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(
+                        0, "模型蓄水池已在运行中，请勿重复启动。", "提示", 0x30
+                    )
+            sys.exit(0)
 
     # 自动找可用端口（锁拿到了才能安全改 config）
     actual_port = find_available_port(desired_port)
@@ -2500,7 +2830,7 @@ if __name__ == "__main__":
 
     webview = None
     tray_icon = None
-    state = {"window": None, "quitting": False}
+    state = GUI  # 模块级共享 dict：/api/activate 路由也读它
 
     if not HEADLESS:
         # Windows: WebView2 环境检测（Win7 等旧系统自动安装）
@@ -2532,55 +2862,62 @@ if __name__ == "__main__":
             webview = None
 
         # ---- 托盘 ----
-        # Linux 坑：pystray 的 GTK 后端会与 pywebview(GTK) 抢 GLib 主循环，
-        # 直接 SIGSEGV（g_application_run main context already acquired）。
-        # Linux 默认禁用托盘；确要开：GATEWAY_TRAY=1 + PYSTRAY_BACKEND=xorg（需 Xwayland）。
+        # Linux 不能用 pystray（其 GTK 后端抢 GLib 主循环 → g_application_run
+        # CRITICAL/历史 SIGSEGV）→ 走纯 DBus SNI（start_linux_tray）；
+        # win/mac 仍用 pystray。Linux 默认开，GATEWAY_TRAY=0 关闭。
         tray_enabled = (sys.platform in ("win32", "darwin")
-                        or os.environ.get("GATEWAY_TRAY") == "1")
+                        or os.environ.get("GATEWAY_TRAY") != "0")
         tray_icon = None
         if webview is None:
             pass
         elif not tray_enabled:
-            logger.info("托盘已按平台默认关闭（Linux GTK 主循环冲突），"
-                        "窗口关闭即退出；GATEWAY_TRAY=1 可强制开启")
+            logger.info("托盘已按配置关闭（GATEWAY_TRAY=0），窗口关闭即退出")
         else:
-            try:
+            # ---- 生成托盘图标（三端共用）----
+            def create_tray_icon():
                 from PIL import Image, ImageDraw
-                import pystray
+                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(img)
+                draw.rounded_rectangle([4, 4, 60, 60], radius=14,
+                                       fill=(30, 144, 255))
+                draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
+                return img
 
-                # ---- 生成托盘图标 ----
-                def create_tray_icon():
-                    img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
-                    draw = ImageDraw.Draw(img)
-                    draw.rounded_rectangle([4, 4, 60, 60], radius=14,
-                                           fill=(30, 144, 255))
-                    draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
-                    return img
+            if sys.platform.startswith("linux"):
+                if start_linux_tray("模型蓄水池", create_tray_icon()):
+                    # SNI 注册是同步完成的；truthy 标记让 on_closing 走"隐藏到托盘"
+                    tray_icon = True
+                    logger.info("SNI 托盘已注册（左键=显示窗口，右键菜单=显示窗口/退出）")
+                else:
+                    logger.info("SNI 托盘不可用，窗口关闭即退出")
+            else:
+                try:
+                    import pystray
 
-                def on_show(icon, item):
-                    w = state["window"]
-                    if w:
-                        w.show()
+                    def on_show(icon, item):
+                        w = state["window"]
+                        if w:
+                            w.show()
 
-                def on_quit(icon, item):
-                    state["quitting"] = True
-                    icon.stop()
-                    w = state["window"]
-                    if w:
-                        w.destroy()
+                    def on_quit(icon, item):
+                        state["quitting"] = True
+                        icon.stop()
+                        w = state["window"]
+                        if w:
+                            w.destroy()
 
-                tray_icon = pystray.Icon(
-                    "model-gateway",
-                    create_tray_icon(),
-                    "模型蓄水池",
-                    menu=pystray.Menu(
-                        pystray.MenuItem("显示窗口", on_show, default=True),
-                        pystray.MenuItem("退出", on_quit),
-                    ),
-                )
-            except Exception as e:
-                logger.warning("托盘不可用（%s），以纯窗口模式运行", e)
-                tray_icon = None
+                    tray_icon = pystray.Icon(
+                        "model-gateway",
+                        create_tray_icon(),
+                        "模型蓄水池",
+                        menu=pystray.Menu(
+                            pystray.MenuItem("显示窗口", on_show, default=True),
+                            pystray.MenuItem("退出", on_quit),
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning("托盘不可用（%s），以纯窗口模式运行", e)
+                    tray_icon = None
 
     if webview is None:
         # ---- headless：只跑服务，用浏览器访问 ----
@@ -2611,7 +2948,7 @@ if __name__ == "__main__":
     window.events.closing += on_closing
 
     # ---- 启动系统托盘（有才启） ----
-    if tray_icon is not None:
+    if tray_icon is not None and hasattr(tray_icon, "run"):
         threading.Thread(target=tray_icon.run, daemon=True).start()
 
     # ---- 启动 webview ----

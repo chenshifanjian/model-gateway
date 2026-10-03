@@ -366,3 +366,37 @@ def test_kill_old_instance_win32_branch(monkeypatch):
     monkeypatch.setattr(app_module, "_pid_info", lambda pid: "模型蓄水池.exe")
     assert app_module.kill_old_instance(8000) is True
     assert taskkilled and taskkilled[0][:2] == ["taskkill", "/PID"]
+
+
+def test_single_instance_lock_path(tmp_path, monkeypatch):
+    """锁路径跨启动方式唯一：Linux 用 XDG_RUNTIME_DIR（缺省回退 /tmp/runtime-uid）。"""
+    import sys as _sys
+    monkeypatch.setattr(_sys, "platform", "linux")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    p = app_module.single_instance_lock_path()
+    assert p == tmp_path / "model-reservoir.lock"
+    assert p.parent.is_dir()
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    p2 = app_module.single_instance_lock_path()
+    assert str(p2).startswith("/tmp/runtime-")
+    assert p2.name == "model-reservoir.lock"
+
+
+def test_image_to_argb():
+    """SNI IconPixmap 载荷：ARGB 大端字节序。"""
+    from PIL import Image
+    img = Image.new("RGBA", (2, 1), (0, 0, 0, 0))
+    img.putpixel((0, 0), (255, 0, 0, 255))  # 纯红不透明
+    w, h, data = app_module.image_to_argb(img)
+    assert (w, h) == (2, 1)
+    assert data[0:4] == bytes((255, 255, 0, 0))   # A=255 R=255 G=0 B=0
+    assert data[4:8] == bytes((0, 0, 0, 0))        # 透明像素全 0
+
+
+def test_activate_endpoint():
+    """/api/activate：第二实例唤起已有实例窗口（无窗口环境返回 ok=False，端点恒 200）。"""
+    from fastapi.testclient import TestClient
+    client = TestClient(app_module.app)
+    r = client.post("/api/activate")
+    assert r.status_code == 200
+    assert "ok" in r.json()

@@ -21,7 +21,13 @@ if IS_WIN:
 elif sys.platform == "darwin":
     _hiddenimports.append('pystray._darwin')
 else:
-    _hiddenimports.append('pystray._appindicator')
+    # Linux 托盘走纯 DBus SNI（start_linux_tray），不再依赖 pystray GTK 后端
+    _hiddenimports += [
+        'dbus', 'dbus.bus', 'dbus.connection', 'dbus.exceptions',
+        'dbus.lowlevel', 'dbus.mainloop', 'dbus.mainloop.glib',
+        'dbus.service', 'dbus.utils',
+        '_dbus_bindings', '_dbus_glib_bindings',
+    ]
 
 # ---- Linux GUI：把 gi 类型库(Gtk/WebKit2 等)打进包，运行时钩子设 GI_TYPELIB_PATH ----
 # 依赖目标机器装有 webkit2gtk-4.1（类型库加载的是系统 .so，不打进包内）
