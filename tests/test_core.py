@@ -376,9 +376,11 @@ def test_single_instance_lock_path(tmp_path, monkeypatch):
     p = app_module.single_instance_lock_path()
     assert p == tmp_path / "model-reservoir.lock"
     assert p.parent.is_dir()
+    # Windows 无 os.getuid → mock 掉，三平台均可跑且 uid 确定
+    monkeypatch.setattr(app_module.os, "getuid", lambda: 1000, raising=False)
     monkeypatch.delenv("XDG_RUNTIME_DIR")
     p2 = app_module.single_instance_lock_path()
-    assert str(p2).startswith("/tmp/runtime-")
+    assert str(p2).startswith("/tmp/runtime-1000")
     assert p2.name == "model-reservoir.lock"
 
 
