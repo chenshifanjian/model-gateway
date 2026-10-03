@@ -8,6 +8,7 @@
 <style>
 * { -webkit-user-select: text; user-select: text; }
 :root {
+  color-scheme: light; /* 原生控件(下拉框/弹出层)永远按应用主题走，不跟系统跑 */
   --mac-bg: #F5F5F7;
   --mac-window-bg: rgba(255, 255, 255, 0.65);
   --mac-border: rgba(0, 0, 0, 0.1);
@@ -317,9 +318,9 @@ body {
 }
 
 .filter-bar input, .filter-bar select {
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  color: var(--text-primary);
+  background-color: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  color: #1D1D1F;
   padding: 8px 12px;
   border-radius: 6px;
   font-size: 13px;
@@ -328,23 +329,38 @@ body {
   transition: 0.2s;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
 }
+/* 下拉框：去掉原生外观强制自绘（WebKitGTK 下 GTK 深色主题会把原生框画深色，
+   浅色模式就出现"深框+深字"看不清），箭头用内联 SVG 自己画 */
+.filter-bar select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23555' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+}
+.filter-bar select option {
+  background: #ffffff; color: #1D1D1F;
+}
 
 .filter-bar input:focus, .filter-bar select:focus {
   border-color: var(--accent-primary);
-  background: #fff;
+  background-color: #fff;
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
 }
 
 [data-theme="dark"] .filter-bar input, [data-theme="dark"] .filter-bar select {
-  background: #1c1c1e; border: 1px solid var(--mac-border); box-shadow: none;
+  background-color: #1c1c1e; border: 1px solid var(--mac-border); box-shadow: none;
   color: #ffffff;
-  color-scheme: dark;
+}
+[data-theme="dark"] .filter-bar select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23bbb' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 [data-theme="dark"] .filter-bar select option {
   background: #1c1c1e; color: #ffffff;
 }
 [data-theme="dark"] .filter-bar input:focus, [data-theme="dark"] .filter-bar select:focus {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 .table-container {
@@ -613,9 +629,13 @@ input:checked + .slider:before { transform: translateX(14px); }
 </head>
 <body>
 <script>
-  if (localStorage.getItem('theme') === 'dark') {
-    document.documentElement.setAttribute('data-theme', 'dark');
-  }
+  // 主题三态：auto(默认，跟随系统) / light / dark —— 首帧前先应用，避免闪白/闪黑
+  (function () {
+    var pref = localStorage.getItem('theme') || 'auto';
+    var dark = pref === 'dark' ||
+      (pref === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+  })();
 </script>
 
 <!-- 管理门禁 -->
@@ -1063,19 +1083,37 @@ function showToast(msg, type = 'ok', duration = 3000) {
   _toastTimer = setTimeout(() => { el.className = 'toast ' + type; }, duration);
 }
 
-/* ============ 主题 ============ */
-function toggleTheme() {
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  if (isDark) {
-    document.documentElement.removeAttribute('data-theme');
-    document.getElementById('themeBtn').innerHTML = '🌙';
-    localStorage.setItem('theme', 'light');
-  } else {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    document.getElementById('themeBtn').innerHTML = '☀️';
-    localStorage.setItem('theme', 'dark');
-  }
+/* ============ 主题（三态：auto 跟随系统 / light / dark） ============ */
+function applyTheme() {
+  var pref = localStorage.getItem('theme') || 'auto';
+  var dark = pref === 'dark' ||
+    (pref === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
+  updateThemeBtn(pref);
 }
+function updateThemeBtn(pref) {
+  var b = document.getElementById('themeBtn');
+  if (!b) return;
+  pref = pref || localStorage.getItem('theme') || 'auto';
+  // 图标显示【当前】状态：🖥️=跟随系统 ☀️=浅色 🌙=深色
+  b.innerHTML = pref === 'auto' ? '🖥️' : (pref === 'light' ? '☀️' : '🌙');
+  b.title = pref === 'auto'
+    ? '主题：跟随系统（点击固定为浅色）'
+    : (pref === 'light' ? '主题：浅色（点击固定为深色）'
+                         : '主题：深色（点击回到跟随系统）');
+}
+function toggleTheme() {
+  var pref = localStorage.getItem('theme') || 'auto';
+  var next = pref === 'auto' ? 'light' : (pref === 'light' ? 'dark' : 'auto');
+  localStorage.setItem('theme', next);
+  applyTheme();
+}
+// 系统主题实时联动（auto 模式下切系统深浅色立即生效）
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+  if ((localStorage.getItem('theme') || 'auto') === 'auto') applyTheme();
+});
+document.addEventListener('DOMContentLoaded', applyTheme);
 
 /* ============ 数据 ============ */
 let data = [];
