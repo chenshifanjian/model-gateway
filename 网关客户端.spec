@@ -33,7 +33,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PySide6', 'shiboken6', 'numpy', 'matplotlib', 'scipy', 'pandas', 'PIL._tkinter_finder', 'tkinter', 'unittest', 'test', 'pytest', 'distutils', 'setuptools', 'pkg_resources', 'xmlrpc', 'ensurepip', 'lib2to3'],
+    excludes=['PySide6', 'shiboken6', 'numpy', 'matplotlib', 'scipy', 'pandas', 'PIL._tkinter_finder', 'tkinter', 'unittest', 'test', 'pytest', 'setuptools', 'pkg_resources', 'xmlrpc', 'ensurepip', 'lib2to3'],
     noarchive=False,
     optimize=0,
 )
