@@ -665,7 +665,7 @@ async def run_health_checks(tasks: list[tuple[str, str, str, str]]) -> dict:
         return_exceptions=True,
     )
     new_status = {}
-    for (name, m, _, _), result in zip(tasks, results):
+    for (name, m, _, _), result in zip(tasks, results, strict=True):
         k = f"{name}||{m}"
         if isinstance(result, Exception):
             new_status[k] = {
@@ -1451,7 +1451,7 @@ async def open_url(data: OpenUrlIn, _=Depends(verify_admin)):
         webbrowser.open(url)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, f"打开失败: {e}")
+        raise HTTPException(500, f"打开失败: {e}") from e
 
 
 @app.get("/api/preset-info")
@@ -1836,7 +1836,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
         if prelude:
             yield "data: " + json.dumps({"choices": [{"delta": {"content": prelude}, "index": 0}]}, ensure_ascii=False) + "\n\n"
 
-        for attempt in range(max_attempts):
+        for _attempt in range(max_attempts):
             for provider, model in candidates:
                 k = f"{provider['name']}||{model}"
                 req_body = copy.deepcopy(body)
@@ -2015,7 +2015,7 @@ async def proxy_chat(request: Request, force: bool = False):
     if stream:
         return await _stream_with_failover(candidates, body, is_router, prelude=vision_prelude)
 
-    for attempt in (2,) if is_router else (1,):
+    for _attempt in (2,) if is_router else (1,):
         for provider, model in candidates:
             k = f"{provider['name']}||{model}"
             req_body = copy.deepcopy(body)
@@ -2271,7 +2271,7 @@ async def set_autostart(request: Request, _=Depends(verify_admin)):
                     LAUNCH_PLIST.unlink()
             return {"ok": True, "enabled": enabled}
         except Exception as e:
-            raise HTTPException(500, f"操作失败: {e}")
+            raise HTTPException(500, f"操作失败: {e}") from e
     if winreg is None:
         try:
             if enabled:
@@ -2282,7 +2282,7 @@ async def set_autostart(request: Request, _=Depends(verify_admin)):
                 AUTOSTART_DESKTOP.unlink()
             return {"ok": True, "enabled": enabled}
         except Exception as e:
-            raise HTTPException(500, f"操作失败: {e}")
+            raise HTTPException(500, f"操作失败: {e}") from e
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0,
                             winreg.KEY_SET_VALUE)
@@ -2298,7 +2298,7 @@ async def set_autostart(request: Request, _=Depends(verify_admin)):
         winreg.CloseKey(key)
         return {"ok": True, "enabled": enabled}
     except Exception as e:
-        raise HTTPException(500, f"操作失败: {e}")
+        raise HTTPException(500, f"操作失败: {e}") from e
 
 
 @app.api_route("/v1/models", methods=["GET"], dependencies=[Depends(verify_client)])
@@ -2342,6 +2342,84 @@ async def proxy_models():
     return result
 
 
+# ============================================================
+# AUTO_KILL：只杀本网关进程（源码 app.py / 打包客户端），绝不误杀同端口的陌生程序
+# ============================================================
+_GATEWAY_MARKERS = ("app.py", "model-gateway", "gateway")
+
+
+def _looks_like_gateway(info: str) -> bool:
+    """进程信息（cmdline/镜像名）里是否带本网关的标记。"""
+    if not info:
+        return False
+    low = info.lower()
+    return "网关" in info or any(m in low for m in _GATEWAY_MARKERS)
+
+
+def _pid_info(pid: int) -> str:
+    """取进程信息：Linux 读 /proc、macOS 用 ps、Windows 取 tasklist 镜像名。"""
+    try:
+        if sys.platform.startswith("linux"):
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+        if sys.platform == "darwin":
+            return subprocess.run(["ps", "-o", "args=", "-p", str(pid)],
+                                  capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                             capture_output=True, text=True, timeout=10).stdout
+        return out.split('","')[0].strip('"') if '","' in out else out
+    except Exception:
+        return ""
+
+
+def _pid_is_gateway(pid: int) -> bool:
+    if pid <= 0 or pid == os.getpid():
+        return False
+    return _looks_like_gateway(_pid_info(pid))
+
+
+def kill_old_instance(port: int) -> bool:
+    """杀掉占用 port 的【本网关】旧实例；陌生进程一律不动（返回 False，让调用方顺延端口）。"""
+    pids = []
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            pids = [int(x) for x in out.split() if x.strip().isdigit()]
+        except Exception:
+            return False
+    elif sys.platform != "win32":
+        try:
+            out = subprocess.run(["ss", "-ltnpH", f"sport = :{port}"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            pids = [int(m) for m in re.findall(r"pid=(\d+)", out)]
+        except Exception:
+            return False
+    else:
+        try:
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                                 capture_output=True, text=True, timeout=10).stdout
+            pids = [int(line.split()[-1]) for line in out.splitlines()
+                    if f":{port}" in line and "LISTENING" in line
+                    and line.split()[-1].isdigit()]
+        except Exception:
+            return False
+    for pid in pids:
+        if not _pid_is_gateway(pid):
+            logger.warning("AUTO_KILL: 端口 %d 的监听 pid=%d 不是网关进程，不杀", port, pid)
+            continue
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                               capture_output=True, text=True, timeout=10)
+            else:
+                os.kill(pid, 15)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 if __name__ == "__main__":
     import uvicorn
     import time
@@ -2359,60 +2437,12 @@ if __name__ == "__main__":
             s.settimeout(0.5)
             return s.connect_ex(("127.0.0.1", port)) == 0
 
-    def kill_old_instance(port: int) -> bool:
-        if sys.platform == "darwin":
-            # macOS: find listener via `lsof` and kill it
-            try:
-                out = subprocess.run(
-                    ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
-                    capture_output=True, text=True, timeout=10,
-                ).stdout
-                for line in out.splitlines():
-                    pid = int(line.strip())
-                    if pid and pid != os.getpid():
-                        os.kill(pid, 15)
-                        return True
-            except Exception:
-                pass
-            return False
-        if sys.platform != "win32":
-            # Linux: find listener via `ss` and kill it
-            try:
-                out = subprocess.run(
-                    ["ss", "-ltnpH", f"sport = :{port}"],
-                    capture_output=True, text=True, timeout=10,
-                ).stdout
-                import re as _re
-                m = _re.search(r"pid=(\d+)", out)
-                if m:
-                    os.kill(int(m.group(1)), 15)
-                    return True
-            except Exception:
-                pass
-            return False
-        try:
-            out = subprocess.run(
-                ["netstat", "-ano", "-p", "TCP"],
-                capture_output=True, text=True, timeout=10,
-            ).stdout
-            for line in out.splitlines():
-                if f":{port}" in line and "LISTENING" in line:
-                    pid = line.split()[-1]
-                    if pid.isdigit():
-                        subprocess.run(
-                            ["taskkill", "/PID", pid, "/F"],
-                            capture_output=True, text=True, timeout=10,
-                        )
-                        return True
-        except Exception:
-            pass
-        return False
-
     def find_available_port(start: int, max_try: int = 100) -> int:
         for p in range(start, start + max_try):
             if not port_in_use(p):
                 return p
-        return start  # fallback
+        # 100 个端口全被占：宁可明确失败，也不返回一个还被占用的端口（会连到陌生服务上）
+        raise RuntimeError(f"端口 {start}~{start + max_try - 1} 全部被占用，无法启动")
 
     # ---- 单实例限制（文件锁要最先，避免 config 被污染） ----
     AUTO_KILL = os.environ.get("GATEWAY_AUTO_KILL") == "1"

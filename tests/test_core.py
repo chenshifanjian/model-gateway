@@ -271,3 +271,54 @@ def test_page_diag_endpoint_oversize_rejected():
     r = client.post("/api/page-diag", content=b"x" * 20000)  # httpx 自动带 content-length
     assert r.status_code == 200
     assert r.json()["ok"] is False  # 超 8KB 不读 body、不记日志
+
+
+# ============================================================
+# AUTO_KILL 身份校验（只杀网关，不误杀同端口陌生进程）
+# ============================================================
+def test_looks_like_gateway():
+    assert app_module._looks_like_gateway("/home/u/.venv/bin/python app.py") is True
+    assert app_module._looks_like_gateway("/opt/dist/v1.6.1-网关客户端") is True
+    assert app_module._looks_like_gateway("C:\\app\\Model-Gateway.exe") is True
+    assert app_module._looks_like_gateway("/usr/sbin/nginx: master process") is False
+    assert app_module._looks_like_gateway("") is False
+
+
+def test_pid_is_gateway_excludes_self_and_invalid():
+    import os as _os
+    assert app_module._pid_is_gateway(_os.getpid()) is False  # 不能杀自己
+    assert app_module._pid_is_gateway(0) is False
+    assert app_module._pid_is_gateway(-1) is False
+
+
+def test_pid_is_gateway_identifies_via_info(monkeypatch):
+    monkeypatch.setattr(app_module, "_pid_info",
+                        lambda pid: "python app.py" if pid == 1234 else "/usr/sbin/cron -f")
+    assert app_module._pid_is_gateway(1234) is True
+    assert app_module._pid_is_gateway(4321) is False
+
+
+def _fake_ss(*_a, **_k):
+    class R:
+        stdout = 'LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:* users:(("x",pid=7777,fd=5))'
+    return R()
+
+
+def test_kill_old_instance_spares_strangers(monkeypatch):
+    import os as _os
+    killed = []
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_ss)
+    monkeypatch.setattr(app_module, "_pid_info", lambda pid: "nginx worker process")
+    monkeypatch.setattr(_os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    assert app_module.kill_old_instance(8000) is False
+    assert killed == []            # 陌生进程分毫不动
+
+
+def test_kill_old_instance_kills_gateway(monkeypatch):
+    import os as _os
+    killed = []
+    monkeypatch.setattr(app_module.subprocess, "run", _fake_ss)
+    monkeypatch.setattr(app_module, "_pid_info", lambda pid: "/u/.venv/bin/python app.py")
+    monkeypatch.setattr(_os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    assert app_module.kill_old_instance(8000) is True
+    assert killed == [(7777, 15)]  # 只杀网关本体，SIGTERM
