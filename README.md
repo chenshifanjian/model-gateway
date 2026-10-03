@@ -27,14 +27,22 @@ pip install -r requirements.txt
 ### Linux（Arch / 任意发行版）
 
 ```bash
-# 无头模式（推荐服务器/命令行）
-GATEWAY_HEADLESS=1 python app.py     # 打开 http://127.0.0.1:8000
+# ① 原生窗口模式（推荐桌面用法）
+# 注意：uv 建的 venv 看不到 pacman 装的 gi/WebKit2，
+# 必须用系统 Python 建带 system-site-packages 的环境：
+python3 -m venv --system-site-packages .venv-gui
+.venv-gui/bin/pip install -r requirements.txt
+GATEWAY_DATA_DIR=dist .venv-gui/bin/python app.py   # 弹原生窗口
 
-# 原生窗口模式（需要 GTK WebKit 后端）
-sudo pacman -S webkit2gtk-4.1
-pip install "pywebview[gtk]"
-python app.py
+# ② 无头模式（服务器 / 命令行）
+GATEWAY_HEADLESS=1 python app.py     # 打开 http://127.0.0.1:8000
 ```
+
+系统依赖：`webkit2gtk-4.1` + `python-gobject`（Arch 默认已带，缺则 `sudo pacman -S webkit2gtk-4.1 python-gobject`）。
+
+> **Linux 默认关闭系统托盘**：pystray 的 GTK 后端会和 pywebview 抢 GLib 主循环导致段错误。
+> 需要托盘时：`GATEWAY_TRAY=1 PYSTRAY_BACKEND=xorg ... python app.py`（需 Xwayland + python-xlib）。
+> 无托盘时**关闭窗口即退出**，不留后台进程。
 
 开机自启：设置页开关会写入 `~/.config/autostart/model-gateway.desktop`（XDG 标准，GNOME/KDE 等均支持）。
 

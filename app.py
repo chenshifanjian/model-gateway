@@ -2461,45 +2461,63 @@ if __name__ == "__main__":
                     except Exception:
                         logger.warning("WebView2 安装失败，尝试使用系统默认浏览器")
 
+        # ---- 窗口能力：webview 可导入才有 GUI ----
         try:
             import webview
-            from PIL import Image, ImageDraw
-            import pystray
-
-            # ---- 生成托盘图标 ----
-            def create_tray_icon():
-                img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
-                draw = ImageDraw.Draw(img)
-                draw.rounded_rectangle([4, 4, 60, 60], radius=14,
-                                       fill=(30, 144, 255))
-                draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
-                return img
-
-            def on_show(icon, item):
-                w = state["window"]
-                if w:
-                    w.show()
-
-            def on_quit(icon, item):
-                state["quitting"] = True
-                icon.stop()
-                w = state["window"]
-                if w:
-                    w.destroy()
-
-            tray_icon = pystray.Icon(
-                "model-gateway",
-                create_tray_icon(),
-                "无限额度监控网关",
-                menu=pystray.Menu(
-                    pystray.MenuItem("显示窗口", on_show, default=True),
-                    pystray.MenuItem("退出", on_quit),
-                ),
-            )
         except Exception as e:
-            logger.warning("GUI 不可用（%s），回退浏览器/headless 模式", e)
+            logger.warning("webview 不可用（%s），回退浏览器/headless 模式", e)
             webview = None
-            tray_icon = None
+
+        # ---- 托盘 ----
+        # Linux 坑：pystray 的 GTK 后端会与 pywebview(GTK) 抢 GLib 主循环，
+        # 直接 SIGSEGV（g_application_run main context already acquired）。
+        # Linux 默认禁用托盘；确要开：GATEWAY_TRAY=1 + PYSTRAY_BACKEND=xorg（需 Xwayland）。
+        tray_enabled = (sys.platform in ("win32", "darwin")
+                        or os.environ.get("GATEWAY_TRAY") == "1")
+        tray_icon = None
+        if webview is None:
+            pass
+        elif not tray_enabled:
+            logger.info("托盘已按平台默认关闭（Linux GTK 主循环冲突），"
+                        "窗口关闭即退出；GATEWAY_TRAY=1 可强制开启")
+        else:
+            try:
+                from PIL import Image, ImageDraw
+                import pystray
+
+                # ---- 生成托盘图标 ----
+                def create_tray_icon():
+                    img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+                    draw = ImageDraw.Draw(img)
+                    draw.rounded_rectangle([4, 4, 60, 60], radius=14,
+                                           fill=(30, 144, 255))
+                    draw.polygon([(22, 20), (44, 32), (22, 44)], fill="white")
+                    return img
+
+                def on_show(icon, item):
+                    w = state["window"]
+                    if w:
+                        w.show()
+
+                def on_quit(icon, item):
+                    state["quitting"] = True
+                    icon.stop()
+                    w = state["window"]
+                    if w:
+                        w.destroy()
+
+                tray_icon = pystray.Icon(
+                    "model-gateway",
+                    create_tray_icon(),
+                    "无限额度监控网关",
+                    menu=pystray.Menu(
+                        pystray.MenuItem("显示窗口", on_show, default=True),
+                        pystray.MenuItem("退出", on_quit),
+                    ),
+                )
+            except Exception as e:
+                logger.warning("托盘不可用（%s），以纯窗口模式运行", e)
+                tray_icon = None
 
     if webview is None:
         # ---- headless：只跑服务，用浏览器访问 ----
@@ -2520,15 +2538,18 @@ if __name__ == "__main__":
     state["window"] = window
 
     def on_closing():
-        if state["quitting"]:
-            return
+        if state["quitting"] or tray_icon is None:
+            # 正在退出 / 无托盘可藏：放行关闭 → webview.start() 返回 → 进程退出
+            return True
+        # 有托盘：拦截关闭事件，隐藏到托盘常驻
         window.hide()
         return False
 
     window.events.closing += on_closing
 
-    # ---- 启动系统托盘 ----
-    threading.Thread(target=tray_icon.run, daemon=True).start()
+    # ---- 启动系统托盘（有才启） ----
+    if tray_icon is not None:
+        threading.Thread(target=tray_icon.run, daemon=True).start()
 
     # ---- 启动 webview ----
     webview.start()
