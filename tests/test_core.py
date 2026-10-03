@@ -244,3 +244,30 @@ def test_is_1m_model_true(monkeypatch):
 def test_is_1m_model_false(monkeypatch):
     monkeypatch.setattr(app_module, "model_details", {})
     assert app_module.is_1m_model("sensenova-u1-fast") is False
+
+
+# ============================================================
+# /api/page-diag 前端诊断回传（去重 + 端点契约）
+# ============================================================
+def test_page_diag_dedup_window():
+    t0 = 1000.0
+    assert app_module.page_diag_dedup("diag-payload-A", t0) is True
+    assert app_module.page_diag_dedup("diag-payload-B", t0 + 1) is True   # 不同内容互不影响
+    assert app_module.page_diag_dedup("diag-payload-A", t0 + 30) is False  # 60s 内重复抑制
+    assert app_module.page_diag_dedup("diag-payload-A", t0 + 61) is True   # 过窗恢复
+
+
+def test_page_diag_endpoint_ok():
+    from fastapi.testclient import TestClient
+    client = TestClient(app_module.app)  # 不进 with：跳过 lifespan/后台任务
+    r = client.post("/api/page-diag", json={"kind": "unit-test", "msg": "hello"})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_page_diag_endpoint_oversize_rejected():
+    from fastapi.testclient import TestClient
+    client = TestClient(app_module.app)
+    r = client.post("/api/page-diag", content=b"x" * 20000)  # httpx 自动带 content-length
+    assert r.status_code == 200
+    assert r.json()["ok"] is False  # 超 8KB 不读 body、不记日志

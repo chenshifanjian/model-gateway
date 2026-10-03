@@ -677,6 +677,9 @@ input:checked + .slider:before { transform: translateX(14px); }
   window.addEventListener('error', function (e) {
     reportDiag('js-error', { msg: String(e.message), line: e.lineno, file: String(e.filename || '').split('/').pop() });
   });
+  window.addEventListener('unhandledrejection', function (e) {
+    reportDiag('js-error', { msg: 'unhandledrejection: ' + String((e.reason && e.reason.message) || e.reason) });
+  });
   // 主题三态：auto(默认，跟随系统) / light / dark —— 首帧前先应用，避免闪白/闪黑
   (function () {
     var pref = null, mqlDark = null, mqAdd = null;
@@ -1156,17 +1159,9 @@ function updateThemeBtn(pref) {
   pref = pref || localStorage.getItem('theme') || 'auto';
   // 图标显示【当前】状态：🖥️=跟随系统 ☀️=浅色 🌙=深色
   b.innerHTML = pref === 'auto' ? '🖥️' : (pref === 'light' ? '☀️' : '🌙');
-  b.title = pref === 'auto'
-    ? '主题：跟随系统（点击固定为浅色）'
-    : (pref === 'light' ? '主题：浅色（点击固定为深色）'
-                         : '主题：深色（点击回到跟随系统）');
+  b.title = '切换主题（当前：' + (pref === 'auto' ? '跟随系统' : pref === 'light' ? '浅色' : '深色') + '）';
 }
-function toggleTheme() {
-  var pref = localStorage.getItem('theme') || 'auto';
-  var next = pref === 'auto' ? 'light' : (pref === 'light' ? 'dark' : 'auto');
-  localStorage.setItem('theme', next);
-  applyTheme();
-}
+/* 旧循环切换 toggleTheme 已删：按钮改为打开三选菜单 openThemeMenu */
 // 系统主题实时联动（auto 模式下切系统深浅色立即生效）
 // 兼容老 WebKit：只有 addListener；两个 API 都没有就上报——这正是"点了没反应"类问题的定位点
 (function () {
@@ -1191,32 +1186,9 @@ function _themeReady() {
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', _themeReady);
 else _themeReady();
 
-/* ============ 自诊断（写 localStorage，探针或 DevTools 读取） ============
-   注意：勿用 SIGUSR1 —— JavaScriptCore 占用它做 GC 并覆盖处理器，会杀进程 */
-try {
-  window.addEventListener('error', e => {
-    try {
-      const old = localStorage.getItem('gw_diag_err') || '';
-      localStorage.setItem('gw_diag_err', (old + ' | ' + e.message + '@' + e.lineno).slice(-800));
-    } catch (_) {}
-  });
-  document.addEventListener('DOMContentLoaded', () => setTimeout(() => {
-    try {
-      localStorage.setItem('gw_diag', JSON.stringify({
-        ts: Date.now(),
-        toggle: typeof toggleTheme,
-        pref: localStorage.getItem('theme'),
-        dataTheme: document.documentElement.getAttribute('data-theme'),
-        icon: (document.getElementById('themeBtn') || {}).textContent,
-        mqlDark: matchMedia('(prefers-color-scheme: dark)').matches,
-        colorScheme: getComputedStyle(document.documentElement).colorScheme,
-        hasCsBtn: !!document.querySelector('.cs-btn'),
-        modalOpen: !!document.querySelector('.modal-overlay.show'),
-        htmlLen: document.documentElement.innerHTML.length
-      }));
-    } catch (_) {}
-  }, 1500));
-} catch (_) {}
+/* 自诊断统一走 init 块的 reportDiag（服务端 /api/page-diag → gateway.log）。
+   不再写 localStorage —— 诊断不能依赖可能缺席的存储（private_mode 教训），
+   也不再依赖探针读共享存储（探针会覆盖真窗口数据）。勿用 SIGUSR1：JSC 占用它做 GC。 */
 
 /* ============ 自绘下拉（接管 .filter-bar 内所有 select） ============
    原生 select 的弹出列表在 WebKitGTK 跟 GTK 主题渲染，与页面主题脱节，
@@ -1265,8 +1237,7 @@ function _csPlaceMenu(menu, btn) {
 function openThemeMenu(btn) {
   reportDiag('theme-click', {
     pref: localStorage.getItem('theme'),
-    modalOpen: !!document.querySelector('.modal-overlay.show'),
-    hitBtn: (document.elementFromPoint(btn.getBoundingClientRect().x + 17, btn.getBoundingClientRect().y + 17) || {}).id
+    modalOpen: !!document.querySelector('.modal-overlay.show')
   });
   const wasMine = _csOpenMenu && _csOpenMenu._isThemeMenu;
   closeCsMenu();
@@ -1320,7 +1291,12 @@ function initCustomSelects() {
 }
 document.addEventListener('click', closeCsMenu);           // 点外面关闭
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCsMenu(); });
-window.addEventListener('scroll', closeCsMenu, true);      // 滚动关闭（fixed 定位会脱位）
+window.addEventListener('scroll', e => {                   // 滚动关闭（fixed 定位会脱位）
+  var t = e.target;
+  if (t && t.closest && t.closest('.cs-menu')) return;     // 菜单自身滚动不关（长列表要能滚到底）
+  closeCsMenu();
+}, true);
+window.addEventListener('resize', closeCsMenu);            // 窗口尺寸变化防菜单错位
 initCustomSelects();
 
 /* ============ 数据 ============ */

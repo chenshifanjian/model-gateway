@@ -943,13 +943,34 @@ async def index(request: Request):
 # ============================================================
 # 管理接口（admin 鉴权）
 # ============================================================
+_page_diag_seen: dict = {}
+
+
+def page_diag_dedup(text: str, now: float) -> bool:
+    """True=允许记录。同内容 60s 内只记一次——防 JS 错误风暴刷爆 gateway.log。
+    超 256 条直接清空（都是 60s 内的热键，清了最多多记几条，无碍）。"""
+    import hashlib
+    key = hashlib.md5(text.encode("utf-8", "replace")).hexdigest()
+    last = _page_diag_seen.get(key)
+    if last is not None and now - last < 60.0:
+        return False
+    _page_diag_seen[key] = now
+    if len(_page_diag_seen) > 256:
+        _page_diag_seen.clear()
+    return True
+
+
 @app.post("/api/page-diag")
 async def page_diag(request: Request):
     """前端自诊断回传：记录 UI 状态/JS 错误到日志（仅 localhost，≤4KB，无敏感数据）。
     窗口内的 JS 问题（按钮点了没反应等）靠它定位——共享 localStorage 会被探针覆盖，不可靠。"""
     try:
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > 8192:
+            return {"ok": False, "err": "too large"}  # 超限不读 body
         body = (await request.body())[:4096].decode("utf-8", "replace").replace("\n", " ")
-        logger.info("PAGE-DIAG %s", body)
+        if body and page_diag_dedup(body, time.time()):
+            logger.info("PAGE-DIAG %s", body)
     except Exception:
         pass
     return {"ok": True}
