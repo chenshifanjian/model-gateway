@@ -41,6 +41,16 @@ logger = logging.getLogger("gateway")
 # ============================================================
 import sys
 
+# 控制台编码统一 UTF-8：英文/非中文区位 Windows（cp1252 等）打印中文日志会
+# UnicodeEncodeError 直接崩，中文 Windows(GBK) 碰不到，CI/海外机器必踩
+for _stream in (sys.stdout, sys.stderr):
+    _reconf = getattr(_stream, "reconfigure", None) if _stream is not None else None
+    if callable(_reconf):
+        try:
+            _reconf(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 if getattr(sys, 'frozen', False):
     APP_DIR = Path(sys._MEIPASS)
     if sys.platform == "darwin":
