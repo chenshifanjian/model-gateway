@@ -380,8 +380,10 @@ def test_single_instance_lock_path(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module.os, "getuid", lambda: 1000, raising=False)
     monkeypatch.delenv("XDG_RUNTIME_DIR")
     p2 = app_module.single_instance_lock_path()
-    assert str(p2).startswith("/tmp/runtime-1000")
-    assert p2.name == "model-reservoir.lock"
+    # Windows 的 Path 用反斜杠 stringify → 归一化后再断言
+    s = str(p2).replace("\\", "/")
+    assert s.startswith("/tmp/runtime-1000")
+    assert s.endswith("model-reservoir.lock")
 
 
 def test_image_to_argb():
