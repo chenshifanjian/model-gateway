@@ -441,6 +441,8 @@ def test_usage_all_days(monkeypatch, tmp_path):
 
 def test_ensure_gtk_im_module(monkeypatch):
     """缺 GTK_IM_MODULE 时按已装模块补齐（中文输入根因修复）；已设则不覆盖。"""
+    # 该函数 Linux-only（sys.platform 守卫）；CI 有 mac/win runner，mock 平台
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
     # 未设置 + fcitx 模块存在 -> 补 fcitx
     env = {}
     assert app_module.ensure_gtk_im_module(env, exists=lambda p: p.endswith("im-fcitx5.so")) is True
@@ -459,9 +461,10 @@ def test_ensure_gtk_im_module(monkeypatch):
     assert env["GTK_IM_MODULE"] == "ibus"
 
 
-def test_ensure_gtk_im_module_file():
+def test_ensure_gtk_im_module_file(monkeypatch):
     """打包版根因：PyInstaller 把 GTK_PATH 等指向包内且包里无 immodules.cache，
     必须补 GTK_IM_MODULE_FILE 指向系统缓存，否则 GTK 加载不到任何 IM 模块。"""
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
     cache = "/usr/lib/gtk-3.0/3.0.0/immodules.cache"
     # 缓存存在 -> 补 GTK_IM_MODULE_FILE（即使 GTK_IM_MODULE 已设，两变量独立补齐）
     env = {"GTK_IM_MODULE": "fcitx"}
