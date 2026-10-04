@@ -124,7 +124,7 @@ META_FILE = DATA_DIR / "models_meta.json"
 ROUTERS_FILE = DATA_DIR / "routers.json"
 ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.7.0"
 
 MAX_HISTORY_DAYS = 30
 MAX_USAGE_DAYS = 30        # 按天数范围查询(近24小时/7天/30天)的上限
@@ -1389,8 +1389,23 @@ async def vision_models_api(_=Depends(verify_admin)):
     return {"ok": True, "data": sorted(SUPPORTS_VISION.keys())}
 
 
-# ---------- 系统公告（Gitee 远程，本地兜底） ----------
-DEFAULT_ANNOUNCEMENT_URL = "https://gitee.com/ywtc000/dongye/raw/master/announcement.md"
+# ---------- 系统公告（远端拉取，本地兜底） ----------
+# 公告源指向本项目自己的仓库（默认分支 revive 上的 announcement.md）。
+# 想改公告不必改代码：改仓库里那个文件就行，客户端最长 5 分钟后生效；
+# 断网 / 首次启动 / 远端抓取失败时用下面的 FALLBACK_ANNOUNCEMENT 兜底。
+DEFAULT_ANNOUNCEMENT_URL = "https://raw.githubusercontent.com/chenshifanjian/model-reservoir/revive/announcement.md"
+FALLBACK_ANNOUNCEMENT = """# 模型蓄水池 · Model Reservoir
+
+欢迎使用。本软件把多个 LLM 提供商的额度聚合成一个 **OpenAI 兼容接口**，供本机各种客户端调用。
+
+- 当前版本：**v{version}**
+- 开源仓库：https://github.com/chenshifanjian/model-reservoir
+
+> 本仓库是 [zk-2025/model-gateway](https://github.com/zk-2025/model-gateway)（作者：东野 / ywtc000）的二创分支，
+> 已获原作者书面授权，遵循 **CC BY-NC 4.0**：保留署名，禁止商用。
+
+配置入口在「上游」页，调用情况看「用量」与「调用记录」两页。
+""".replace("{version}", APP_VERSION)
 ANNOUNCEMENT_CACHE_FILE = DATA_DIR / "announcement_cache.json"
 _announcement_cache = {"content": None, "ts": 0}
 ANNOUNCEMENT_TTL = 300
@@ -1407,8 +1422,9 @@ def _announce_response(ok: bool, content: str) -> dict:
 
 @app.get("/api/announcement")
 async def get_announcement(_=Depends(verify_admin)):
-    """优先读 config.json 的 announcement_url（如 Gitee raw 链接）远程抓取；
-    未配置或抓取失败时回退到本地 announcement.json。远程结果缓存 5 分钟。"""
+    """优先按 config.json 的 announcement_url（任意 http/https raw 链接）远程抓取；
+    未配置或抓取失败时依次回退：上次成功的缓存 → 本地 announcement.json → 内置兜底文案。
+    远端结果缓存 5 分钟。"""
     cfg = load_config()
     url = cfg.get("announcement_url") or DEFAULT_ANNOUNCEMENT_URL
     now = time.time()
@@ -1444,11 +1460,34 @@ async def get_announcement(_=Depends(verify_admin)):
             return _announce_response(True, data.get("content", ""))
         except Exception:
             logger.exception("parse announcement.json failed")
-    return _announce_response(False, "暂无公告内容。")
+    # 内置兜底文案：ok 仍为 True——对使用者来说这就是"有内容"，
+    # 让前端照常按 Markdown 渲染，而不是掉进 ok=False 的纯文本分支
+    return _announce_response(True, FALLBACK_ANNOUNCEMENT)
 
 
 # ---------- 在线更新 ----------
-VERSION_CHECK_URL = "https://gitee.com/ywtc000/dongye/raw/master/version.json"
+VERSION_CHECK_URL = "https://raw.githubusercontent.com/chenshifanjian/model-reservoir/revive/version.json"
+RELEASE_PAGE_URL = "https://github.com/chenshifanjian/model-reservoir/releases"
+
+
+def platform_key() -> str:
+    """当前平台标识：windows / macos / linux"""
+    if sys.platform.startswith("win"):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    return "linux"
+
+
+def download_url_for_platform(data: dict) -> str:
+    """version.json 允许按平台给不同产物：download_url_<平台> 优先，其次通用 download_url。
+    一个 version.json 服务三端，免得 Linux/macOS 用户下到 Windows 的 exe。"""
+    return data.get("download_url_" + platform_key()) or data.get("download_url", "")
+
+
+def hot_update_supported() -> bool:
+    """程序内热替换二进制只做了 Windows：其它平台只能手动换包"""
+    return sys.platform == "win32" and getattr(sys, "frozen", False)
 _update_download_state = {
     "downloading": False,
     "progress": 0,
@@ -1485,7 +1524,7 @@ def _cleanup_old_exe():
 
 @app.get("/api/check-update")
 async def check_update(_=Depends(verify_admin)):
-    """检查 gitee 是否有新版本"""
+    """检查远端 version.json 是否有新版本（下载地址按当前平台挑）"""
     cfg = load_config()
     url = cfg.get("version_check_url") or VERSION_CHECK_URL
     try:
@@ -1504,9 +1543,12 @@ async def check_update(_=Depends(verify_admin)):
                 "latest": latest_ver,
                 "has_update": has_update,
                 "force_update": force_update,
-                "download_url": data.get("download_url", ""),
+                "download_url": download_url_for_platform(data),
+                "release_page": data.get("release_page") or RELEASE_PAGE_URL,
                 "release_notes": data.get("release_notes", ""),
                 "min_version": min_ver,
+                "platform": platform_key(),
+                "hot_update": hot_update_supported(),
             }
     except Exception as e:
         logger.warning("check update failed: %s", e)
@@ -1877,7 +1919,7 @@ async def check_all(_=Depends(verify_admin)):
 # ============================================================
 # 预设模板（三层加载：远端热更新 → 内置兜底）
 # ============================================================
-PRESET_REMOTE_URL = "https://gitee.com/ywtc000/dongye/raw/master/presets.json"
+PRESET_REMOTE_URL = "https://raw.githubusercontent.com/chenshifanjian/model-reservoir/revive/presets.json"
 PRESET_DOC_URL = "https://pv284bk9no6.feishu.cn/wiki/HCOuwXuZGibDUGkWLlpcQuiLnDf"
 PRESET_CACHE_TTL = 300
 

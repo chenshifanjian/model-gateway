@@ -683,3 +683,72 @@ def test_autostart_desktop_content_frozen(monkeypatch):
     assert 'Exec=env GATEWAY_AUTO_KILL=1 "/opt/reservoir/v1.6.2-模型蓄水池"' in txt
     assert "_MEI" not in txt
     assert ".py" not in txt
+
+
+# ============================================================
+# 公告 / 在线更新：远端地址、平台分派、兜底文案
+# ============================================================
+def test_remote_sources_point_to_own_repo():
+    """公告/版本/预设的默认远端都指向本仓库，不再指向上游作者的 gitee
+    （否则 fork 出去的软件，公告与更新地址仍被别人左右）"""
+    for url in (app_module.DEFAULT_ANNOUNCEMENT_URL,
+                app_module.VERSION_CHECK_URL,
+                app_module.PRESET_REMOTE_URL):
+        assert url.startswith("https://raw.githubusercontent.com/chenshifanjian/model-reservoir/")
+        assert "gitee.com" not in url
+
+
+def test_fallback_announcement_is_markdown_with_version():
+    text = app_module.FALLBACK_ANNOUNCEMENT
+    assert text.strip()
+    assert text.lstrip().startswith("#")
+    assert app_module.APP_VERSION in text
+
+
+def test_download_url_for_platform(monkeypatch):
+    data = {
+        "download_url": "https://ex/all",
+        "download_url_linux": "https://ex/linux",
+        "download_url_windows": "https://ex/win",
+        "download_url_macos": "https://ex/mac",
+    }
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
+    assert app_module.platform_key() == "linux"
+    assert app_module.download_url_for_platform(data) == "https://ex/linux"
+
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+    assert app_module.platform_key() == "windows"
+    assert app_module.download_url_for_platform(data) == "https://ex/win"
+
+    monkeypatch.setattr(app_module.sys, "platform", "darwin")
+    assert app_module.platform_key() == "macos"
+    assert app_module.download_url_for_platform(data) == "https://ex/mac"
+
+    # 只给通用地址时，三端都拿通用地址；都没有则空串
+    assert app_module.download_url_for_platform({"download_url": "https://ex/all"}) == "https://ex/all"
+    assert app_module.download_url_for_platform({}) == ""
+
+
+def test_hot_update_only_on_windows_frozen(monkeypatch):
+    monkeypatch.setattr(app_module.sys, "platform", "linux")
+    monkeypatch.setattr(app_module.sys, "frozen", False, raising=False)
+    assert app_module.hot_update_supported() is False
+
+    monkeypatch.setattr(app_module.sys, "platform", "win32")
+    assert app_module.hot_update_supported() is False  # 源码模式不给热更
+    monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
+    assert app_module.hot_update_supported() is True
+
+
+def test_version_json_matches_app_version_and_has_assets():
+    """仓库根 version.json 是客户端更新源：版本号必须跟 APP_VERSION 同步，
+    三端下载地址必须齐备（缺一个就会让那个平台的用户看到空按钮）"""
+    p = Path(__file__).resolve().parent.parent / "version.json"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["version"] == app_module.APP_VERSION
+    for plat in ("windows", "linux", "macos"):
+        url = data["download_url_" + plat]
+        assert url.startswith(
+            "https://github.com/chenshifanjian/model-reservoir/releases/download/v" + data["version"] + "/")
+    assert data["release_notes"].strip()
+    assert data["release_page"].startswith("https://github.com/chenshifanjian/model-reservoir/releases")

@@ -1,0 +1,9 @@
+{
+  "version": "1.7.0",
+  "min_version": "",
+  "release_page": "https://github.com/chenshifanjian/model-reservoir/releases/tag/v1.7.0",
+  "release_notes": "v1.7.0：界面按桌面应用重做（四页拆分、菜单收敛、键盘可达、内联 SVG 图标）；能力辨别改为家族级知识库并单列「深度思考」；修复 Linux 中文输入法与打包版开机自启路径；非 Windows 平台更新改为跳转发布页。",
+  "download_url_windows": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.0/ModelReservoir-v1.7.0-windows.exe",
+  "download_url_linux": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.0/ModelReservoir-v1.7.0-linux-x86_64",
+  "download_url_macos": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.0/ModelReservoir-v1.7.0-macos.zip"
+}
