@@ -835,6 +835,7 @@ input:checked + .slider:before { transform: translateX(14px); }
         <button class="btn btn-primary usage-tab" data-days="1" onclick="switchUsageTab(1)">近24小时</button>
         <button class="btn usage-tab" data-days="7" onclick="switchUsageTab(7)">近 7 天</button>
         <button class="btn usage-tab" data-days="30" onclick="switchUsageTab(30)">近 30 天</button>
+        <button class="btn usage-tab" data-days="0" onclick="switchUsageTab(0)">全部</button>
       </div>
     </div>
     <div id="usageOverview" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;"></div>

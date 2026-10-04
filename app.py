@@ -79,7 +79,8 @@ ANNOUNCEMENT_FILE = DATA_DIR / "announcement.json"
 APP_VERSION = "1.6.1"
 
 MAX_HISTORY_DAYS = 30
-MAX_USAGE_DAYS = 30
+MAX_USAGE_DAYS = 30        # 按天数范围查询(近24小时/7天/30天)的上限
+USAGE_RETENTION_DAYS = 3650  # 消耗记录保留期：10年，"全部"按钮才有意义
 HISTORY_CLEANUP_INTERVAL = 6 * 3600
 ONE_MILLION = 1048576
 POLL_INTERVAL = 300
@@ -357,7 +358,8 @@ async def append_usage(record: dict):
 def _read_usage_sync(days: int):
     if not USAGE_FILE.exists():
         return []
-    cutoff = time.time() - days * 86400
+    # days<=0 = "全部"：不按时间截断
+    cutoff = time.time() - days * 86400 if days > 0 else 0
     records = []
     with open(USAGE_FILE, "r", encoding="utf-8") as f:
         for line in f:
@@ -378,7 +380,7 @@ async def read_usage(days: int = 1):
 def _cleanup_usage_sync():
     if not USAGE_FILE.exists():
         return 0
-    cutoff = time.time() - MAX_USAGE_DAYS * 86400
+    cutoff = time.time() - USAGE_RETENTION_DAYS * 86400
     kept = []
     removed = 0
     with open(USAGE_FILE, "r", encoding="utf-8") as f:
@@ -1061,7 +1063,8 @@ async def get_stability(hours: int = 24, _=Depends(verify_admin)):
 
 @app.get("/api/usage")
 async def get_usage(days: int = 1, _=Depends(verify_admin)):
-    days = max(1, min(days, MAX_USAGE_DAYS))
+    # days<=0 = "全部"（有史以来）；>0 才钳到 1..MAX_USAGE_DAYS
+    days = 0 if days <= 0 else max(1, min(days, MAX_USAGE_DAYS))
     records = await read_usage(days)
     total = {"pt": 0, "ct": 0, "tt": 0, "requests": 0}
     by_day = {}

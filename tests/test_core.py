@@ -404,3 +404,37 @@ def test_activate_endpoint():
     r = client.post("/api/activate")
     assert r.status_code == 200
     assert "ok" in r.json()
+
+
+def test_usage_all_days(monkeypatch, tmp_path):
+    """/api/usage?days=0 = "全部"：不截断、不被钳到 1..30；days>30 仍钳到 30。"""
+    import time as _time
+    f = tmp_path / "usage.jsonl"
+    old = _time.time() - 90 * 86400   # 90 天前的记录（旧逻辑30天会被清理/查询截掉）
+    recent = _time.time() - 3600
+    f.write_text(
+        '{"ts": %d, "pt": 10, "ct": 20, "model": "m", "provider": "p"}\n' % old +
+        '{"ts": %d, "pt": 1, "ct": 2, "model": "m", "provider": "p"}\n' % recent,
+        encoding="utf-8")
+    monkeypatch.setattr(app_module, "USAGE_FILE", f)
+
+    # 底层: days<=0 不截断
+    assert len(app_module._read_usage_sync(0)) == 2
+    assert len(app_module._read_usage_sync(1)) == 1
+    # cleanup: 90 天记录在 10 年保留期内 → 不删
+    assert app_module._cleanup_usage_sync() == 0
+    assert f.exists() and len(f.read_text(encoding="utf-8").splitlines()) == 2
+
+    # 端点: days=0 原样返回全量
+    from fastapi.testclient import TestClient
+    client = TestClient(app_module.app)
+    headers = {"Authorization": "Bearer " + app_module.LOCAL_API_KEY}
+    r = client.get("/api/usage?days=0", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["days"] == 0
+    assert body["total"]["requests"] == 2
+    assert body["total"]["pt"] == 11
+    # days>MAX 钳到 30（"近30天"语义不变）
+    r2 = client.get("/api/usage?days=999", headers=headers)
+    assert r2.json()["days"] == 30
