@@ -438,3 +438,66 @@ def test_usage_all_days(monkeypatch, tmp_path):
     # days>MAX 钳到 30（"近30天"语义不变）
     r2 = client.get("/api/usage?days=999", headers=headers)
     assert r2.json()["days"] == 30
+
+def test_ensure_gtk_im_module(monkeypatch):
+    """缺 GTK_IM_MODULE 时按已装模块补齐（中文输入根因修复）；已设则不覆盖。"""
+    # 未设置 + fcitx 模块存在 -> 补 fcitx
+    env = {}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: p.endswith("im-fcitx5.so")) is True
+    assert env["GTK_IM_MODULE"] == "fcitx"
+    # 只有 ibus -> 补 ibus
+    env = {}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: p.endswith("im-ibus.so")) is True
+    assert env["GTK_IM_MODULE"] == "ibus"
+    # 什么模块都没有 -> 不瞎设
+    env = {}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: False) is False
+    assert "GTK_IM_MODULE" not in env
+    # 已设 -> 不覆盖
+    env = {"GTK_IM_MODULE": "ibus"}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: p.endswith(".so")) is False
+    assert env["GTK_IM_MODULE"] == "ibus"
+
+
+def test_ensure_gtk_im_module_file():
+    """打包版根因：PyInstaller 把 GTK_PATH 等指向包内且包里无 immodules.cache，
+    必须补 GTK_IM_MODULE_FILE 指向系统缓存，否则 GTK 加载不到任何 IM 模块。"""
+    cache = "/usr/lib/gtk-3.0/3.0.0/immodules.cache"
+    # 缓存存在 -> 补 GTK_IM_MODULE_FILE（即使 GTK_IM_MODULE 已设，两变量独立补齐）
+    env = {"GTK_IM_MODULE": "fcitx"}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: p == cache) is False
+    assert env["GTK_IM_MODULE_FILE"] == cache
+    # 两变量都缺 -> 一次补齐
+    env = {}
+    def exists(p):
+        return p.endswith("im-fcitx5.so") or p == cache
+    assert app_module.ensure_gtk_im_module(env, exists=exists) is True
+    assert env["GTK_IM_MODULE"] == "fcitx"
+    assert env["GTK_IM_MODULE_FILE"] == cache
+    # 模块在但缓存文件不在（无 GTK 缓存的机器）-> 补 MODULE 不补 FILE
+    env = {}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: p.endswith(".so")) is True
+    assert env["GTK_IM_MODULE"] == "fcitx"
+    assert "GTK_IM_MODULE_FILE" not in env
+    # 彻底什么都没有 -> 不瞎设
+    env = {}
+    assert app_module.ensure_gtk_im_module(env, exists=lambda p: False) is False
+    assert "GTK_IM_MODULE" not in env and "GTK_IM_MODULE_FILE" not in env
+    # 已设不覆盖
+    env = {"GTK_IM_MODULE_FILE": "/custom/immodules.cache"}
+    app_module.ensure_gtk_im_module(env, exists=lambda p: True)
+    assert env["GTK_IM_MODULE_FILE"] == "/custom/immodules.cache"
+
+
+def test_call_log_no_100_cap():
+    """调用记录不再 100 条截断（1 万条兜底），且每条带 ts 供相对时间显示。"""
+    assert app_module.CALL_LOG_MAX >= 10000
+    assert app_module.call_log.maxlen == app_module.CALL_LOG_MAX
+    # ts 由 append 点写入：每个 time 行的下一行必须紧跟 ts 行（防回归）
+    import inspect
+    lines = inspect.getsource(app_module).splitlines()
+    time_idx = [i for i, l in enumerate(lines) if '"time": time.strftime("%H:%M:%S"),' in l]
+    assert len(time_idx) >= 9
+    for i in time_idx:
+        assert i + 1 < len(lines) and '"ts": time.time()' in lines[i + 1], f"call_log append 缺 ts: line {i}"
+

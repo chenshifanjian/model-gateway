@@ -472,6 +472,60 @@ tbody tr:last-child td { border-bottom: none; }
 
 .empty { text-align: center; padding: 40px; color: var(--text-secondary); font-size: 13px; }
 
+/* ---- 消耗统计 / 调用记录 优雅化 ---- */
+.count-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.04); border: 1px solid var(--mac-border);
+  padding: 3px 10px; border-radius: 999px; margin-left: 10px;
+  vertical-align: middle;
+}
+[data-theme="dark"] .count-badge { background: rgba(255, 255, 255, 0.06); }
+
+/* 每日趋势柱状条 */
+.usage-trend {
+  display: flex; align-items: flex-end; gap: 4px;
+  height: 72px; padding: 10px 14px 6px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--mac-border); border-radius: 10px;
+  margin-bottom: 16px; overflow-x: auto;
+}
+[data-theme="dark"] .usage-trend { background: rgba(0, 0, 0, 0.2); }
+.usage-trend .tbar {
+  flex: 1 0 8px; max-width: 26px; min-width: 6px;
+  background: linear-gradient(180deg, #A8B1FF, #6B72FF);
+  border-radius: 3px 3px 0 0; opacity: 0.85;
+  transition: opacity 0.15s ease; position: relative;
+}
+.usage-trend .tbar:hover { opacity: 1; }
+.usage-trend .tbar.empty-day { background: var(--mac-border); opacity: 0.5; }
+
+/* 模型消耗占比条 */
+.token-share { display: flex; align-items: center; gap: 8px; }
+.token-share .ts-bar {
+  flex: 1; height: 5px; border-radius: 3px;
+  background: rgba(0, 0, 0, 0.07); overflow: hidden; min-width: 40px;
+}
+[data-theme="dark"] .token-share .ts-bar { background: rgba(255, 255, 255, 0.1); }
+.token-share .ts-fill {
+  display: block; height: 100%; border-radius: 3px;
+  background: linear-gradient(90deg, #A8B1FF, #6B72FF);
+}
+.token-share .ts-pct {
+  font-size: 12px; color: var(--text-secondary);
+  font-variant-numeric: tabular-nums; min-width: 38px; text-align: right;
+}
+
+/* 调用记录滚动区：长列表不撑爆页面，表头吸顶 */
+.log-scroll { max-height: 440px; overflow-y: auto; }
+.log-scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--mac-bg); /* 吸顶必须实色，半透明会透出滚动内容 */ }
+[data-theme="dark"] .log-scroll thead th { background: #1c1c1e; }
+.log-scroll .more-row td {
+  text-align: center; padding: 10px;
+  position: sticky; bottom: 0; background: var(--mac-bg); /* 吸顶必须实色，半透明会透出滚动内容 */
+}
+[data-theme="dark"] .log-scroll .more-row td { background: #1c1c1e; }
+
 .switch { position: relative; display: inline-block; width: 34px; height: 20px; vertical-align: middle; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 20px; }
@@ -839,39 +893,43 @@ input:checked + .slider:before { transform: translateX(14px); }
       </div>
     </div>
     <div id="usageOverview" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;"></div>
+    <div id="usageTrend" class="usage-trend" style="display: none;" title="每日 Token 消耗（悬停查看当天明细）"></div>
     <div class="table-container">
       <table>
         <thead>
           <tr>
             <th>渠道 · 模型</th>
-            <th width="120">请求数</th>
-            <th width="160">输入 Token</th>
-            <th width="160">输出 Token</th>
-            <th width="160">合计 Token</th>
+            <th width="110" style="text-align:right;">请求数</th>
+            <th width="140" style="text-align:right;">输入 Token</th>
+            <th width="140" style="text-align:right;">输出 Token</th>
+            <th width="140" style="text-align:right;">合计 Token</th>
+            <th width="150">占比</th>
           </tr>
         </thead>
         <tbody id="usageBody">
-          <tr><td colspan="5" class="empty">加载中...</td></tr>
+          <tr><td colspan="6" class="empty">加载中...</td></tr>
         </tbody>
       </table>
     </div>
 
     <!-- 调用日志 -->
-    <h2 style="font-size:16px; font-weight:600; margin-top:24px; margin-bottom:12px;">📋 最近调用记录 <span style="font-size:12px;font-weight:400;color:var(--text-secondary);">（最多保留100条）</span></h2>
+    <h2 style="font-size:16px; font-weight:600; margin-top:24px; margin-bottom:12px;">📋 最近调用记录<span id="callLogCount" class="count-badge" style="display:none;">0 条</span></h2>
     <div class="table-container">
+      <div class="log-scroll">
       <table>
         <thead>
           <tr>
-            <th width="100">时间</th>
+            <th width="130">时间</th>
             <th width="60">状态</th>
             <th>账号 · 模型</th>
-            <th width="100">Token</th>
+            <th width="120">Token</th>
           </tr>
         </thead>
         <tbody id="callLogBody">
           <tr><td colspan="4" class="empty">暂无调用记录</td></tr>
         </tbody>
       </table>
+      </div>
     </div>
     </div> <!-- end usage-view -->
 
@@ -1414,33 +1472,59 @@ function fmtNum(n) {
 }
 function renderUsage(data) {
   const t = data.total || {};
+  const totalTt = t.tt || 0;
+  const avgReq = t.requests ? Math.round(totalTt / t.requests) : 0;
   const cards = [
-    { label: '输入 Token', value: t.pt },
-    { label: '输出 Token', value: t.ct },
-    { label: '合计 Token', value: t.tt },
-    { label: '请求数', value: t.requests },
+    { label: '输入 Token', value: t.pt, sub: totalTt ? '占 ' + Math.round((t.pt || 0) / totalTt * 100) + '%' : '' },
+    { label: '输出 Token', value: t.ct, sub: totalTt ? '占 ' + Math.round((t.ct || 0) / totalTt * 100) + '%' : '' },
+    { label: '合计 Token', value: t.tt, sub: t.requests ? '平均 ' + fmtNum(avgReq) + ' / 次' : '' },
+    { label: '请求数', value: t.requests, sub: data.days === 0 ? '有史以来' : '近 ' + data.days + ' 天' },
   ];
   document.getElementById('usageOverview').innerHTML = cards.map(c =>
     `<div class="provider-card" style="padding: 14px 16px;">
-       <div style="font-size: 12px; color: var(--text-secondary);">${c.label}</div>
-       <div style="font-size: 22px; font-weight: 600; color: var(--text-primary); margin-top: 4px;">${fmtNum(c.value)}</div>
+       <div style="font-size: 12px; color: var(--text-secondary); display:flex; justify-content:space-between; align-items:baseline;">
+         <span>${c.label}</span><span style="font-size:11px;opacity:.75;">${c.sub}</span>
+       </div>
+       <div style="font-size: 22px; font-weight: 600; color: var(--text-primary); margin-top: 4px; font-variant-numeric: tabular-nums;">${fmtNum(c.value)}</div>
      </div>`
   ).join('');
+
+  // 每日趋势：>=2 天才展示（单日柱状没信息量）
+  const days = data.by_day || [];
+  const trend = document.getElementById('usageTrend');
+  if (days.length >= 2) {
+    const maxTt = Math.max.apply(null, days.map(d => d.tt || 0).concat([1]));
+    trend.innerHTML = days.map(d => {
+      const tt = d.tt || 0;
+      const h = tt > 0 ? Math.max(4, Math.round(tt / maxTt * 100)) : 3;
+      const cls = tt > 0 ? 'tbar' : 'tbar empty-day';
+      return `<span class="${cls}" style="height:${h}%" title="${d.date}：${fmtNum(tt)} token · ${d.requests} 次调用"></span>`;
+    }).join('');
+    trend.style.display = 'flex';
+  } else {
+    trend.innerHTML = '';
+    trend.style.display = 'none';
+  }
+
   const rows = data.by_model || [];
   document.getElementById('usageBody').innerHTML = rows.length
-    ? rows.map(r => `<tr>
+    ? rows.map(r => {
+        const share = totalTt ? Math.min(100, Math.max(1, Math.round((r.tt || 0) / totalTt * 100))) : 0;
+        return `<tr>
         <td>
           <div class="model-name" style="display: flex; align-items: center;">
             <span class="model-provider-badge">${r.provider || 'unknown'}</span>
             <span>${r.model || 'unknown'}</span>
           </div>
         </td>
-        <td>${fmtNum(r.requests)}</td>
-        <td>${fmtNum(r.pt)}</td>
-        <td>${fmtNum(r.ct)}</td>
-        <td>${fmtNum(r.tt)}</td>
-      </tr>`).join('')
-    : '<tr><td colspan="5" class="empty">暂无消耗记录</td></tr>';
+        <td style="text-align:right; font-variant-numeric: tabular-nums;">${fmtNum(r.requests)}</td>
+        <td style="text-align:right; font-variant-numeric: tabular-nums; color: var(--text-secondary);">${fmtNum(r.pt)}</td>
+        <td style="text-align:right; font-variant-numeric: tabular-nums; color: var(--text-secondary);">${fmtNum(r.ct)}</td>
+        <td style="text-align:right; font-variant-numeric: tabular-nums; font-weight: 600;">${fmtNum(r.tt)}</td>
+        <td><div class="token-share"><span class="ts-bar"><span class="ts-fill" style="width:${share}%"></span></span><span class="ts-pct">${share}%</span></div></td>
+      </tr>`;
+      }).join('')
+    : '<tr><td colspan="6" class="empty">暂无消耗记录</td></tr>';
 }
 
 function renderStability() {
@@ -2680,30 +2764,75 @@ function restorePortEdit() {
   actions.appendChild(copyBtn);
 }
 
+// 调用记录：数据留全量（后端1万条），前端分页显示 + 相对时间，长列表不撑爆页面
+let callLogData = [];
+let callLogShown = 30;
+const CALL_LOG_PAGE = 30;
+
+function fmtRelTime(ts) {
+  if (!ts) return null;
+  const diff = Math.max(0, Date.now() / 1000 - ts);
+  if (diff < 60) return '刚刚';
+  if (diff < 3600) return Math.floor(diff / 60) + ' 分钟前';
+  if (diff < 86400) return Math.floor(diff / 3600) + ' 小时前';
+  if (diff < 172800) return '昨天';
+  if (diff < 604800) return Math.floor(diff / 86400) + ' 天前';
+  return new Date(ts * 1000).toLocaleDateString();
+}
+
+function renderCallLog() {
+  const tbody = document.getElementById('callLogBody');
+  const badge = document.getElementById('callLogCount');
+  if (badge) {
+    badge.textContent = callLogData.length + ' 条';
+    badge.style.display = callLogData.length ? '' : 'none';
+  }
+  if (!callLogData.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无调用记录</td></tr>';
+    return;
+  }
+  // 最新的在前
+  const newest = callLogData.slice().reverse();
+  const visible = newest.slice(0, callLogShown);
+  const rowsHtml = visible.map(d => {
+    const ok = d.status === 'ok';
+    const stColor = ok ? 'var(--success)' : 'var(--danger)';
+    const tokens = d.tokens ? fmtTokens(d.tokens) : '–';
+    const rel = fmtRelTime(d.ts);
+    const timeHtml = rel
+      ? `<span title="${d.time}${d.ts ? ' (' + new Date(d.ts * 1000).toLocaleString() + ')' : ''}">${rel}</span>`
+      : `<span title="${d.time}">${d.time}</span>`;
+    const errHtml = d.error
+      ? `<div style="font-size:11px;color:${stColor};margin-top:2px;" title="${d.error}">${d.error}</div>` : '';
+    return `<tr>
+        <td style="font-size:12px;color:var(--text-secondary);white-space:nowrap;">${timeHtml}</td>
+        <td>
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${stColor};vertical-align:middle;" title="${ok ? '成功' : '失败'}"></span>
+        </td>
+        <td>
+          <span class="model-provider-badge">${d.provider || '-'}</span>
+          <span style="font-size:13px;">${d.model || '-'}</span>
+          ${errHtml}
+        </td>
+        <td style="font-size:12px;color:var(--text-secondary);font-variant-numeric:tabular-nums;text-align:right;">${tokens}</td>
+      </tr>`;
+  }).join('');
+  const remain = newest.length - visible.length;
+  const moreHtml = remain > 0
+    ? `<tr class="more-row"><td colspan="4"><button class="btn" onclick="callLogShown += CALL_LOG_PAGE; renderCallLog()">加载更多（还有 ${remain} 条）</button></td></tr>`
+    : '';
+  const scroller = tbody.closest('.log-scroll');
+  const keepScroll = scroller ? scroller.scrollTop : 0;
+  tbody.innerHTML = rowsHtml + moreHtml;
+  if (scroller && keepScroll > 0) scroller.scrollTop = keepScroll;
+}
+
 async function loadCallLog() {
   try {
     const r = await apiFetch('/api/call-log');
     const data = await r.json();
-    const tbody = document.getElementById('callLogBody');
-    if (!data || !data.length) {
-      tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无调用记录</td></tr>';
-      return;
-    }
-    tbody.innerHTML = data.slice().reverse().map(d => {
-      const stIcon = d.status === 'ok' ? '✅' : '❌';
-      const stColor = d.status === 'ok' ? 'var(--success)' : 'var(--danger)';
-      const tokens = d.tokens ? fmtTokens(d.tokens) : '-';
-      const err = d.error ? ` <span style="font-size:11px;color:${stColor};">(${d.error})</span>` : '';
-      return `<tr>
-        <td style="font-size:12px;color:var(--text-secondary);">${d.time}</td>
-        <td><span style="font-size:16px;">${stIcon}</span>${err}</td>
-        <td>
-          <span class="model-provider-badge">${d.provider || '-'}</span>
-          <span style="font-size:13px;">${d.model || '-'}</span>
-        </td>
-        <td style="font-size:12px;color:var(--text-secondary);font-variant-numeric:tabular-nums;">${tokens}</td>
-      </tr>`;
-    }).join('');
+    callLogData = Array.isArray(data) ? data : [];
+    renderCallLog();
   } catch (e) {
     if (e.message !== 'Unauthorized') console.error("loadCallLog failed:", e);
   }

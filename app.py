@@ -41,6 +41,53 @@ logger = logging.getLogger("reservoir")
 # ============================================================
 import sys
 
+# ============================================================
+# 输入法自愈（中文输入）
+# ============================================================
+# 桌面会话常漏设 GTK_IM_MODULE（QT_IM_MODULE/XMODIFIERS 都有，唯独 GTK 没有），
+# GTK3 找不到模块就退回内置简单输入法 → 界面上一个中文字都打不出来。
+# 且打包版还有一坑：PyInstaller 的 pyi_rth_gtk.py 会把
+# GTK_PATH/GTK_EXE_PREFIX/GTK_DATA_PREFIX 全指向包内（_MEI），包里没有
+# immodules.cache → GTK 一个 IM 模块都找不到，只补 GTK_IM_MODULE 也无效。
+# GTK3 支持 GTK_IM_MODULE_FILE 直指缓存文件，补上它即可（实验验证：
+# 打包前缀下 FCITX_LOADED=False，加本变量后 True）。
+# 必须在 import webview / GTK 初始化之前执行（IM 模块按 env 惰性加载）。
+def ensure_gtk_im_module(env, exists=os.path.exists):
+    """补齐 GTK3 中文输入所需环境变量。返回是否补设了 GTK_IM_MODULE。
+
+    1) GTK_IM_MODULE——选哪个 IM 模块（fcitx/ibus）；
+    2) GTK_IM_MODULE_FILE——模块缓存 immodules.cache 的位置（打包版必需）。
+    两件事独立补齐：环境可能只缺其一。
+    """
+    if sys.platform != "linux":
+        return False
+    changed = False
+    if not env.get("GTK_IM_MODULE"):
+        for name, paths in (
+            ("fcitx", ("/usr/lib/gtk-3.0/3.0.0/immodules/im-fcitx5.so",
+                       "/usr/lib64/gtk-3.0/3.0.0/immodules/im-fcitx5.so",
+                       "/usr/lib/gtk-3.0/3.0.0/immodules/im-fcitx.so",
+                       "/usr/lib64/gtk-3.0/3.0.0/immodules/im-fcitx.so")),
+            ("ibus", ("/usr/lib/gtk-3.0/3.0.0/immodules/im-ibus.so",
+                      "/usr/lib64/gtk-3.0/3.0.0/immodules/im-ibus.so")),
+        ):
+            if any(exists(p) for p in paths):
+                env["GTK_IM_MODULE"] = name
+                changed = True
+                break
+    if not env.get("GTK_IM_MODULE_FILE"):
+        for p in ("/usr/lib/gtk-3.0/3.0.0/immodules.cache",
+                  "/usr/lib64/gtk-3.0/3.0.0/immodules.cache",
+                  "/usr/lib/x86_64-linux-gnu/gtk-3.0/3.0.0/immodules.cache",
+                  "/usr/lib/aarch64-linux-gnu/gtk-3.0/3.0.0/immodules.cache"):
+            if exists(p):
+                env["GTK_IM_MODULE_FILE"] = p
+                break
+    return changed
+
+
+ensure_gtk_im_module(os.environ)
+
 # 控制台编码统一 UTF-8：英文/非中文区位 Windows（cp1252 等）打印中文日志会
 # UnicodeEncodeError 直接崩，中文 Windows(GBK) 碰不到，CI/海外机器必踩
 for _stream in (sys.stdout, sys.stderr):
@@ -88,7 +135,7 @@ CIRCUIT_FAIL_THRESHOLD = 3
 CIRCUIT_RECOVERY_SECONDS = 60
 QUALITY_WINDOW = 20
 POLL_MAX_COUNT = 20
-CALL_LOG_MAX = 100
+CALL_LOG_MAX = 10000  # 内存队列事实上无上限（正常使用远达不到；防异常刷量撑爆内存）
 
 
 # ============================================================
@@ -258,7 +305,7 @@ last_poll_time: float = 0
 last_check_time: float = time.time()
 last_history_cleanup: float = 0
 
-# 调用日志（内存队列，最多保留 100 条）
+# 调用日志（内存队列）
 call_log = deque(maxlen=CALL_LOG_MAX)
 
 # 轮询计数（从 config 加载，poll_all 里增量更新）
@@ -1872,6 +1919,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     record_fail(k)
                     call_log.append({
                         "time": time.strftime("%H:%M:%S"),
+                        "ts": time.time(),  # 前端相对时间显示用
                         "provider": provider["name"],
                         "model": model,
                         "status": "fail",
@@ -1890,6 +1938,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     record_fail(k)
                     call_log.append({
                         "time": time.strftime("%H:%M:%S"),
+                        "ts": time.time(),  # 前端相对时间显示用
                         "provider": provider["name"],
                         "model": model,
                         "status": "fail",
@@ -1951,6 +2000,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                         })
                         call_log.append({
                             "time": time.strftime("%H:%M:%S"),
+                            "ts": time.time(),  # 前端相对时间显示用
                             "provider": provider["name"],
                             "model": model,
                             "status": "ok",
@@ -1965,6 +2015,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                     record_fail(k)
                     call_log.append({
                         "time": time.strftime("%H:%M:%S"),
+                        "ts": time.time(),  # 前端相对时间显示用
                         "provider": provider["name"],
                         "model": model,
                         "status": "fail",
@@ -2044,6 +2095,7 @@ async def proxy_chat(request: Request, force: bool = False):
                     last_err = f"upstream {resp.status_code}"
                     call_log.append({
                         "time": time.strftime("%H:%M:%S"),
+                        "ts": time.time(),  # 前端相对时间显示用
                         "provider": provider["name"],
                         "model": model,
                         "status": "fail",
@@ -2071,6 +2123,7 @@ async def proxy_chat(request: Request, force: bool = False):
                         # 调用日志记录
                         call_log.append({
                             "time": time.strftime("%H:%M:%S"),
+                            "ts": time.time(),  # 前端相对时间显示用
                             "provider": provider["name"],
                             "model": model,
                             "status": "ok",
@@ -2099,6 +2152,7 @@ async def proxy_chat(request: Request, force: bool = False):
                     last_err = f"upstream non-json ({resp.status_code})"
                     call_log.append({
                         "time": time.strftime("%H:%M:%S"),
+                        "ts": time.time(),  # 前端相对时间显示用
                         "provider": provider["name"],
                         "model": model,
                         "status": "fail",
@@ -2112,6 +2166,7 @@ async def proxy_chat(request: Request, force: bool = False):
                 last_err = str(e)
                 call_log.append({
                     "time": time.strftime("%H:%M:%S"),
+                    "ts": time.time(),  # 前端相对时间显示用
                     "provider": provider["name"],
                     "model": model,
                     "status": "fail",
@@ -2125,6 +2180,7 @@ async def proxy_chat(request: Request, force: bool = False):
                 last_err = str(e)
                 call_log.append({
                     "time": time.strftime("%H:%M:%S"),
+                    "ts": time.time(),  # 前端相对时间显示用
                     "provider": provider["name"],
                     "model": model,
                     "status": "fail",
