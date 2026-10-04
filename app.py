@@ -193,6 +193,7 @@ def load_meta():
         "non_chat_keywords": [],
         "model_descriptions": {},
         "supports_vision": {},
+        "modalities": {},
     }
     # 内置版（打包内嵌进 exe，断网保底；非打包时与外部版同路径）
     builtin = APP_DIR / "models_meta.json"
@@ -237,6 +238,7 @@ CONTEXT_LIMITS = meta.get("context_limits", {})
 NON_CHAT_KEYWORDS = meta.get("non_chat_keywords", [])
 MODEL_DESCRIPTIONS = meta.get("model_descriptions", {})
 SUPPORTS_VISION = meta.get("supports_vision", {})
+MODEL_MODALITIES = meta.get("modalities", {})
 
 
 # ============================================================
@@ -506,6 +508,64 @@ def is_vision_model(model: str) -> bool:
     """是否支持识图（基于 supports_vision 标记 + 归一化匹配）"""
     norm = normalize_model(model)
     return bool(SUPPORTS_VISION.get(norm) or SUPPORTS_VISION.get(model))
+
+
+# 模态能力类别（key 供 API/前端共用；labels 仅后端校验显式覆盖合法性）
+MODALITY_CATEGORIES = {
+    "text": "纯文本",
+    "vision": "图像理解",
+    "audio_in": "语音理解",
+    "image_gen": "图像生成",
+    "audio_gen": "音频生成",
+    "video_gen": "视频生成",
+    "omni": "全模态",
+    "router": "路由组",
+}
+
+# 名称启发规则，按序首命中即返回：生成类最特异（"gpt-4o-mini-tts" 是 TTS
+# 不是全模态），其次语音理解、全模态，图像理解走 supports_vision 策展+兜底。
+MODALITY_RULES = (
+    # 向量模型最先拦：吃文本吐向量，防 gemini-embedding 被后行 omni 规则带偏
+    ("text", ("embedding", "embed-")),
+    ("image_gen", ("dall-e", "dalle", "gpt-image", "flux", "stable-diffusion",
+                   "sdxl", "midjourney", "kolors", "cogview", "text2image",
+                   "text-to-image", "image-gen", "imagen", "seedream", "wanx")),
+    ("video_gen", ("sora", "kling", "vidu", "hailuo", "mochi", "veo", "t2v",
+                   "text-to-video", "video-gen", "cogvideox", "runway")),
+    ("audio_gen", ("tts", "musicgen", "music", "suno", "lyria", "cosyvoice",
+                   "elevenlabs", "text-to-speech", "audio-gen", "speech-gen",
+                   "voice-gen")),
+    ("audio_in", ("asr", "stt", "whisper", "sensevoice", "paraformer",
+                  "speech-to-text", "audio-understand", "audio-in", "audio2text")),
+    # gpt-4o-mini 只吃文本+图像，须在 omni 前拦下（否则被 "gpt-4o" 带成全模态）
+    ("vision", ("gpt-4o-mini",)),
+    ("omni", ("omni", "gpt-4o", "gemini", "multimodal", "multi-modal")),
+)
+
+# 图像理解的名称兜底（supports_vision 未收录但命名可辨）
+MODALITY_VISION_HINTS = ("vision", "llava", "internvl", "qvq", "minicpm-v",
+                         "-vl", "_vl", "vl-", "vl_")
+
+
+def infer_modality(model: str) -> str:
+    """自动判定模型模态能力，返回 MODALITY_CATEGORIES 的 key。
+
+    优先级：models_meta.modalities 显式覆盖 > 名称启发规则 >
+    supports_vision 策展 > 图像理解命名兜底 > 默认纯文本。
+    显式覆盖值必须是合法类别，否则忽略并回退自动判定（防手误写死）。
+    """
+    norm = normalize_model(model)
+    explicit = MODEL_MODALITIES.get(norm) or MODEL_MODALITIES.get(model)
+    if explicit in MODALITY_CATEGORIES:
+        return explicit
+    for kind, patterns in MODALITY_RULES:
+        if any(p in norm for p in patterns):
+            return kind
+    if is_vision_model(model):
+        return "vision"
+    if any(p in norm for p in MODALITY_VISION_HINTS):
+        return "vision"
+    return "text"
 
 
 def is_1m_model(model: str) -> bool:
@@ -2381,6 +2441,7 @@ async def proxy_models():
             "object": "model",
             "owned_by": "Router",
             "available": True,
+            "modality": "router",
         })
 
     for p in providers:
@@ -2401,6 +2462,7 @@ async def proxy_models():
                 "context_length": ctx_len,
                 "max_position_embeddings": ctx_len,
                 "max_model_len": ctx_len,
+                "modality": infer_modality(m),
             })
     result = {"object": "list", "data": models_list}
     _models_cache["data"] = result

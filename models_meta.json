@@ -165,5 +165,6 @@
       "ctx": 1048576,
       "desc": "Gemini 3.5 Flash 最新版，原生百万上下文支持"
     }
-  }
+  },
+  "modalities": {}
 }

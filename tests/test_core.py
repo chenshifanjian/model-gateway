@@ -504,3 +504,79 @@ def test_call_log_no_100_cap():
     for i in time_idx:
         assert i + 1 < len(lines) and '"ts": time.time()' in lines[i + 1], f"call_log append 缺 ts: line {i}"
 
+
+def test_infer_modality_rules():
+    """模态能力自动辨别：七类规则 + 显式覆盖 + 兜底。"""
+    im = app_module.infer_modality
+    # 默认纯文本
+    assert im("deepseek-v4-flash") == "text"
+    # 向量模型防带偏（不吃 gemini/embedding 命名的生成/全模态规则）
+    assert im("google/gemini-embedding-001") == "text"
+    assert im("text-embedding-3-small") == "text"
+    # 图像生成
+    assert im("dall-e-3") == "image_gen"
+    assert im("black-forest-labs/FLUX.1-schnell") == "image_gen"
+    assert im("stabilityai/stable-diffusion-xl-base-1.0") == "image_gen"
+    # 视频生成
+    assert im("sora-2") == "video_gen"
+    assert im("kling-v1.6") == "video_gen"
+    # 音频生成
+    assert im("gpt-4o-mini-tts") == "audio_gen"
+    assert im("CosyVoice2-0.5B") == "audio_gen"
+    # 音频理解
+    assert im("whisper-large-v3") == "audio_in"
+    assert im("SenseVoiceSmall") == "audio_in"
+    # 图像理解
+    assert im("Qwen/Qwen3-VL-8B-Instruct") == "vision"
+    assert im("meta/llama-3.2-11b-vision-instruct") == "vision"
+    assert im("microsoft/phi-3-vision-128k-instruct") == "vision"
+    # 全模态
+    assert im("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning") == "omni"
+    assert im("gpt-4o") == "omni"
+    assert im("google/gemini-2.5-flash") == "omni"
+    # 生成规则先于全模态（tts 不是 omni）
+    assert im("gpt-4o-mini-tts") != "omni"
+    # gpt-4o-mini 只是图像理解，不是全模态
+    assert im("gpt-4o-mini") == "vision"
+    # 显式覆盖（models_meta.modalities）优先于一切规则
+    monkeypatch_key = "my-legacy-model"
+    app_module.MODEL_MODALITIES[monkeypatch_key] = "video_gen"
+    try:
+        assert im(monkeypatch_key) == "video_gen"
+        # 非法覆盖值被忽略，回退自动判定
+        app_module.MODEL_MODALITIES[monkeypatch_key] = "banana"
+        assert im(monkeypatch_key) == "text"
+    finally:
+        del app_module.MODEL_MODALITIES[monkeypatch_key]
+    # 合法类别集合
+    for m in ("text", "vision", "audio_in", "image_gen", "audio_gen", "video_gen", "omni"):
+        assert m in app_module.MODALITY_CATEGORIES
+
+
+def test_v1_models_modality_field(monkeypatch):
+    """/v1/models 每项带 modality 字段；路由组=router。"""
+    # 测试环境 DATA_DIR 无 providers.json → providers 为空，注入假数据
+    monkeypatch.setattr(app_module, "providers", [
+        {"name": "P1", "models": ["deepseek-v4-flash", "Qwen/Qwen3-VL-8B-Instruct", "sora-2", "whisper-large-v3"],
+         "base_url": "http://x", "api_key": "k", "disabled_models": []},
+    ], raising=False)
+    monkeypatch.setattr(app_module, "ROUTERS", {"myroute": ["deepseek-v4-flash"]}, raising=False)
+    # 清缓存强制重建
+    app_module._models_cache["data"] = None
+    from fastapi.testclient import TestClient
+    client = TestClient(app_module.app)
+    headers = {"Authorization": "Bearer " + app_module.LOCAL_API_KEY}
+    resp = client.get("/v1/models", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    by_id = {d["id"]: d for d in data}
+    assert by_id["P1-deepseek-v4-flash"]["modality"] == "text"
+    assert by_id["P1-Qwen/Qwen3-VL-8B-Instruct"]["modality"] == "vision"
+    assert by_id["P1-sora-2"]["modality"] == "video_gen"
+    assert by_id["P1-whisper-large-v3"]["modality"] == "audio_in"
+    assert by_id["myroute"]["modality"] == "router"
+    # 每项都必须有 modality 且值合法
+    for d in data:
+        assert d.get("modality") in app_module.MODALITY_CATEGORIES, d
+    # 复位缓存，避免污染其他用例
+    app_module._models_cache["data"] = None

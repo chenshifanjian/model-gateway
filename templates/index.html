@@ -482,6 +482,46 @@ tbody tr:last-child td { border-bottom: none; }
 }
 [data-theme="dark"] .count-badge { background: rgba(255, 255, 255, 0.06); }
 
+/* ---- 模型模态能力徽章 + 分类筛选 ---- */
+.mod-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.2px;
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  border: 1px solid transparent; flex-shrink: 0;
+}
+.mod-badge.mod-text      { background: rgba(60, 130, 246, 0.12); color: #3b82f6; border-color: rgba(60, 130, 246, 0.25); }
+.mod-badge.mod-vision    { background: rgba(139, 92, 246, 0.12); color: #8b5cf6; border-color: rgba(139, 92, 246, 0.28); }
+.mod-badge.mod-audio_in  { background: rgba(20, 184, 166, 0.12); color: #0d9488; border-color: rgba(20, 184, 166, 0.28); }
+.mod-badge.mod-image_gen { background: rgba(249, 115, 22, 0.12); color: #f97316; border-color: rgba(249, 115, 22, 0.28); }
+.mod-badge.mod-audio_gen { background: rgba(236, 72, 153, 0.12); color: #ec4899; border-color: rgba(236, 72, 153, 0.28); }
+.mod-badge.mod-video_gen { background: rgba(239, 68, 68, 0.12); color: #ef4444; border-color: rgba(239, 68, 68, 0.28); }
+.mod-badge.mod-omni      { background: linear-gradient(90deg, rgba(249, 115, 22, 0.14), rgba(139, 92, 246, 0.14)); color: #a855f7; border-color: rgba(168, 85, 247, 0.3); }
+.mod-badge.mod-router    { background: rgba(100, 116, 139, 0.12); color: #64748b; border-color: rgba(100, 116, 139, 0.3); }
+
+.mod-filter-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.mod-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.03); border: 1px solid var(--mac-border);
+  padding: 4px 11px; border-radius: 999px; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.mod-chip:hover { border-color: rgba(60, 130, 246, 0.5); color: var(--text-primary); }
+.mod-chip.active { background: rgba(60, 130, 246, 0.12); border-color: rgba(60, 130, 246, 0.55); color: #3b82f6; }
+.mod-chip .chip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.mod-chip .chip-count { font-size: 11px; opacity: 0.75; }
+[data-theme="dark"] .mod-chip { background: rgba(255, 255, 255, 0.05); }
+[data-theme="dark"] .mod-chip.active { background: rgba(60, 130, 246, 0.18); color: #60a5fa; }
+[data-theme="dark"] .mod-badge.mod-text { background: rgba(60, 130, 246, 0.18); color: #60a5fa; }
+[data-theme="dark"] .mod-badge.mod-vision { background: rgba(139, 92, 246, 0.18); color: #a78bfa; }
+[data-theme="dark"] .mod-badge.mod-audio_in { background: rgba(20, 184, 166, 0.18); color: #2dd4bf; }
+[data-theme="dark"] .mod-badge.mod-image_gen { background: rgba(249, 115, 22, 0.18); color: #fb923c; }
+[data-theme="dark"] .mod-badge.mod-audio_gen { background: rgba(236, 72, 153, 0.18); color: #f472b6; }
+[data-theme="dark"] .mod-badge.mod-video_gen { background: rgba(239, 68, 68, 0.18); color: #f87171; }
+[data-theme="dark"] .mod-badge.mod-omni { background: linear-gradient(90deg, rgba(249, 115, 22, 0.2), rgba(139, 92, 246, 0.2)); color: #c084fc; }
+[data-theme="dark"] .mod-badge.mod-router { background: rgba(148, 163, 184, 0.16); color: #94a3b8; }
+
+
 /* 每日趋势柱状条 */
 .usage-trend {
   display: flex; align-items: flex-end; gap: 4px;
@@ -945,7 +985,8 @@ input:checked + .slider:before { transform: translateX(14px); }
       <button type="button" class="modal-close" onclick="document.getElementById('outputModelsModal').classList.remove('show')" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
-      <p style="margin-top:0; font-size: 13px; color: var(--text-secondary);">以下模型名称由本网关自动聚合生成，您可以在第三方工具中直接使用它们。</p>
+      <p style="margin-top:0; font-size: 13px; color: var(--text-secondary);">以下模型名称由本网关自动聚合生成，能力标签自动辨别，您可以在第三方工具中直接使用它们。</p>
+      <div id="outputModFilterBar" class="mod-filter-bar"></div>
       <div id="outputModelList" style="margin-top: 10px; background: rgba(0,0,0,0.02); border: 1px solid var(--mac-border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
         <div class="empty">加载中...</div>
       </div>
@@ -1791,30 +1832,82 @@ function closeProviderEditor() {
   providerEditName = null;
 }
 
+const MODALITY_META = {
+  text:      { label: '纯文本',   icon: '💬', dot: '#3b82f6' },
+  vision:    { label: '图像理解', icon: '👁️', dot: '#8b5cf6' },
+  audio_in:  { label: '语音理解', icon: '🎧', dot: '#0d9488' },
+  image_gen: { label: '图像生成', icon: '🖼️', dot: '#f97316' },
+  audio_gen: { label: '音频生成', icon: '🎵', dot: '#ec4899' },
+  video_gen: { label: '视频生成', icon: '🎬', dot: '#ef4444' },
+  omni:      { label: '全模态',   icon: '🌀', dot: '#a855f7' },
+  router:    { label: '路由组',   icon: '🔀', dot: '#64748b' },
+};
+let outputModelsData = [];
+let outputModActive = 'all';
+
+function modBadge(mod) {
+  const m = MODALITY_META[mod] || MODALITY_META.text;
+  return `<span class="mod-badge mod-${mod}">${m.icon} ${m.label}</span>`;
+}
+
+function renderOutputModChips() {
+  const counts = { all: outputModelsData.length };
+  outputModelsData.forEach(d => { counts[d.modality] = (counts[d.modality] || 0) + 1; });
+  let html = `<button class="mod-chip ${outputModActive === 'all' ? 'active' : ''}" onclick="setOutputModFilter('all')">全部<span class="chip-count">${counts.all}</span></button>`;
+  for (const [key, m] of Object.entries(MODALITY_META)) {
+    const n = counts[key] || 0;
+    html += `<button class="mod-chip ${outputModActive === key ? 'active' : ''}" ${n === 0 ? 'style="opacity:0.45"' : ''} onclick="setOutputModFilter('${key}')"><span class="chip-dot" style="background:${m.dot}"></span>${m.icon} ${m.label}<span class="chip-count">${n}</span></button>`;
+  }
+  document.getElementById('outputModFilterBar').innerHTML = html;
+}
+
+function renderOutputModelList() {
+  const list = document.getElementById('outputModelList');
+  const rows = outputModelsData.filter(d => outputModActive === 'all' || d.modality === outputModActive);
+  if (rows.length === 0) {
+    list.innerHTML = '<div class="empty">该分类下暂无模型</div>';
+    return;
+  }
+  let html = '';
+  rows.forEach(d => {
+    const m = d.id;
+    // 信任边界：m 来自本机 providers.json（用户自己的配置，与改动前同源同插法），
+    // d.modality 已在 openOutputModelsModal 经 MODALITY_META 白名单收敛为 8 个固定 key，不可注入。
+    html += `
+      <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; background: var(--mac-window-bg); border: 1px solid var(--mac-border); border-radius: 6px;">
+        <span style="display: flex; align-items: center; gap: 8px; min-width: 0;">${modBadge(d.modality)}<span style="font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${m}</span></span>
+        <button class="btn" style="padding: 4px 8px; font-size: 12px; flex-shrink: 0;" onclick="copyText('${m}', this)">Copy</button>
+      </div>`;
+  });
+  list.innerHTML = html;
+}
+
+function setOutputModFilter(mod) {
+  outputModActive = mod;
+  renderOutputModChips();
+  renderOutputModelList();
+}
+
 async function openOutputModelsModal() {
   document.getElementById('outputModelsModal').classList.add('show');
+  document.getElementById('outputModFilterBar').innerHTML = '';
   document.getElementById('outputModelList').innerHTML = '<div class="empty">获取中...</div>';
   try {
     const res = await apiFetch('/v1/models');
     if (!res.ok) throw new Error('Failed to fetch models');
     const data = await res.json();
-    let models = data.data.map(m => m.id);
-    models.sort();
-    
-    if (models.length === 0) {
+    outputModelsData = (data.data || []).map(m => ({
+      id: m.id,
+      modality: MODALITY_META[m.modality] ? m.modality : 'text',
+    })).sort((a, b) => a.id.localeCompare(b.id));
+
+    if (outputModelsData.length === 0) {
       document.getElementById('outputModelList').innerHTML = '<div class="empty">暂无可输出模型</div>';
       return;
     }
-    
-    let html = '';
-    models.forEach(m => {
-      html += `
-      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--mac-window-bg); border: 1px solid var(--mac-border); border-radius: 6px;">
-        <span style="font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-primary); font-weight: 500;">${m}</span>
-        <button class="btn" style="padding: 4px 8px; font-size: 12px;" onclick="copyText('${m}', this)">Copy</button>
-      </div>`;
-    });
-    document.getElementById('outputModelList').innerHTML = html;
+    outputModActive = 'all';
+    renderOutputModChips();
+    renderOutputModelList();
   } catch (e) {
     document.getElementById('outputModelList').innerHTML = '<div class="empty" style="color:var(--danger)">获取失败</div>';
   }
