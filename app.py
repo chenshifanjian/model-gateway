@@ -2413,12 +2413,18 @@ AUTOSTART_DESKTOP = Path.home() / ".config" / "autostart" / "model-gateway.deskt
 
 
 def _autostart_desktop_content() -> str:
-    main_py = Path(__file__).resolve()
+    if getattr(sys, "frozen", False):
+        # 打包后 sys.executable 就是二进制本体；而 __file__ 指向 onefile 的临时解包目录
+        # （进程退出即删）。若照搬源码写法，Exec 里会多出一个失效的 .py 参数，故只写二进制，
+        # 并带上 AUTO_KILL 以便登录时接管残留实例。
+        exec_line = f'env GATEWAY_AUTO_KILL=1 "{sys.executable}"'
+    else:
+        exec_line = f"{sys.executable} {Path(__file__).resolve()}"
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=模型蓄水池 (Model Reservoir)\n"
-        f"Exec={sys.executable} {main_py}\n"
+        f"Exec={exec_line}\n"
         "X-GNOME-Autostart-enabled=true\n"
         "NoDisplay=true\n"
     )

@@ -664,3 +664,22 @@ def test_model_capability_endpoint(monkeypatch, tmp_path):
     finally:
         app_module.MODEL_MODALITIES.clear()
         app_module.MODEL_MODALITIES.update(saved)
+
+
+def test_autostart_desktop_content_source(monkeypatch):
+    """源码运行：Exec 应为 python + app.py。"""
+    monkeypatch.delattr(app_module.sys, "frozen", raising=False)
+    txt = app_module._autostart_desktop_content()
+    assert txt.startswith("[Desktop Entry]\n")
+    assert "app.py" in txt
+    assert "NoDisplay=true" in txt
+
+
+def test_autostart_desktop_content_frozen(monkeypatch):
+    """打包运行：Exec 只能是二进制本体，不能带 onefile 临时目录里的 app.py 参数。"""
+    monkeypatch.setattr(app_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(app_module.sys, "executable", "/opt/reservoir/v1.6.2-模型蓄水池")
+    txt = app_module._autostart_desktop_content()
+    assert 'Exec=env GATEWAY_AUTO_KILL=1 "/opt/reservoir/v1.6.2-模型蓄水池"' in txt
+    assert "_MEI" not in txt
+    assert ".py" not in txt
