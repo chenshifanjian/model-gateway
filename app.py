@@ -15,6 +15,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from contextlib import asynccontextmanager
 from collections import deque
+from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -522,50 +523,112 @@ MODALITY_CATEGORIES = {
     "router": "路由组",
 }
 
-# 名称启发规则，按序首命中即返回：生成类最特异（"gpt-4o-mini-tts" 是 TTS
-# 不是全模态），其次语音理解、全模态，图像理解走 supports_vision 策展+兜底。
-MODALITY_RULES = (
-    # 向量模型最先拦：吃文本吐向量，防 gemini-embedding 被后行 omni 规则带偏
-    ("text", ("embedding", "embed-")),
-    ("image_gen", ("dall-e", "dalle", "gpt-image", "flux", "stable-diffusion",
-                   "sdxl", "midjourney", "kolors", "cogview", "text2image",
-                   "text-to-image", "image-gen", "imagen", "seedream", "wanx")),
-    ("video_gen", ("sora", "kling", "vidu", "hailuo", "mochi", "veo", "t2v",
-                   "text-to-video", "video-gen", "cogvideox", "runway")),
-    ("audio_gen", ("tts", "musicgen", "music", "suno", "lyria", "cosyvoice",
-                   "elevenlabs", "text-to-speech", "audio-gen", "speech-gen",
-                   "voice-gen")),
-    ("audio_in", ("asr", "stt", "whisper", "sensevoice", "paraformer",
-                  "speech-to-text", "audio-understand", "audio-in", "audio2text")),
-    # gpt-4o-mini 只吃文本+图像，须在 omni 前拦下（否则被 "gpt-4o" 带成全模态）
-    ("vision", ("gpt-4o-mini",)),
-    ("omni", ("omni", "gpt-4o", "gemini", "multimodal", "multi-modal")),
+# ------------------------------------------------------------------
+# 模型能力知识库（家族级，按官方模型卡于 2026-10 核对）
+# 每行 = (正则, 模态 key, 是否支持深度思考)；对归一化模型名 re.search，按序首命中即返回。
+# 排序铁律：越具体、越易被泛化规则误伤的行必须越靠前 ——
+#   ① 生成类（图像/视频/音频）最特异，最先拦；
+#   ② 同族特例（gpt-4o-mini、minimax-m1、qwen3-vl-*-thinking、nemotron-3-nano-omni）先于其家族宽泛规则；
+#   ③ 全模态 omni 先于通用 vision，vision 先于默认文本。
+# 误判仍可能（模型迭代快），故保留 models_meta.modalities 人工覆盖 + 前端一键纠偏。
+# ------------------------------------------------------------------
+MODEL_CAPABILITY_KB = (
+    # ① 生成类：吐图像 / 视频 / 音频
+    (r"dall-?e|gpt-image|imagen|stable-diffusion|sdxl|midjourney|flux|kolors|cogview|seedream|wanx|text2image|text-to-image|image-gen|sensenova-u1", "image_gen", False),
+    (r"sora|kling|vidu|hailuo|mochi|\bveo\b|t2v|text-to-video|video-gen|cogvideox|runway|seedance", "video_gen", False),
+    (r"\btts\b|-tts|speech-synth|voice-?clone|voice-?design|cosyvoice|fish-speech|musicgen|suno|lyria|elevenlabs|text-to-speech|audio-gen|speech-gen", "audio_gen", False),
+    (r"\basr\b|-asr|speech-to-text|whisper|sensevoice|paraformer|audio2text|speech-recognition|audio-in|audio-understand", "audio_in", False),
+    # 向量 / 重排模型：吃文本吐向量，最先拦，防被后行 omni/vision 带偏
+    (r"embedding|embed-|rerank|bge-|gte-|compassjudger", "text", False),
+    # ② 同族特例：能力与家族默认不同，须先于家族宽泛规则
+    (r"minimax-m1", "text", True),                  # M1：文本+推理
+    (r"qwen3-vl.*thinking", "vision", True),        # Qwen3-VL Thinking：视觉+思考
+    (r"glm-5|glm-4\.7", "text", True),              # GLM-5.x / GLM-4.7：文本+思考
+    (r"nemotron-3-nano-omni", "omni", True),        # 名字已含 omni，显式提权
+    (r"gpt-4o-mini", "vision", False),              # 只吃文本+图像，须先于 gpt-4o 的 omni 规则
+    # ③ 全模态理解（文本+图像+音频[+视频]）
+    (r"omni", "omni", True),
+    (r"gpt-4o|gpt-4\.1|gpt-5|gemini|multimodal|multi-modal", "omni", True),
+    (r"gemma-4", "omni", True),                     # Gemma 4：文本/图像/音频/视频
+    (r"kimi-k3", "omni", True),                     # Kimi K3：原生多模态
+    (r"mimo-v2\.6", "omni", True),                  # MiMo v2.6 pro/flash：全模态理解
+    (r"mimo-v2\.5", "omni", True),                  # MiMo v2.5 / v2.5-Pro：文本+图像+视频+音频全模态理解（官方模型卡）
+    (r"qwen3\.8-omni", "omni", True),
+    # ④ 视觉理解（文本+图像）
+    (r"deepseek-v4|deepseek-flash", "vision", True),   # V4 系列（Pro 正式版 / V4.1 Flash）：原生多模态视觉
+    (r"qwen3\.5|qwen3\.8", "vision", True),            # Qwen3.5/3.8：原生多模态+思考
+    (r"kimi-k2", "vision", True),                      # K2.6：文本+图像+视频输入
+    (r"minimax-m3", "vision", True),                   # M3：原生多模态
+    (r"sensenova-6", "vision", True),
+    (r"nex-n2", "vision", True),
+    (r"step-3", "vision", True),
+    (r"intern-s\d", "vision", True),                   # Intern-S1 / S2
+    (r"gemma-3", "vision", False),
+    (r"mistral-(small-4|large-3|medium-3)", "vision", False),
+    (r"ernie-4\.5-vl|glm-4\.5v|glm-4v|-vl|_vl|vision|llava|internvl|qvq|minicpm-v", "vision", False),
+    # ⑤ 纯文本 + 深度思考（思考链 / reasoning 家族）
+    (r"nemotron-3|gpt-oss|deepseek-r1|reasoner|-r1\b|reasoning|thinking|qwq|qwen3.*think", "text", True),
+    # ⑥ 兜底：纯文本（见 infer_capabilities 末尾）
 )
 
-# 图像理解的名称兜底（supports_vision 未收录但命名可辨）
+# 图像理解的名称兜底（supports_vision 未收录但命名可辨）——仅 KB 未命中时生效
 MODALITY_VISION_HINTS = ("vision", "llava", "internvl", "qvq", "minicpm-v",
                          "-vl", "_vl", "vl-", "vl_")
 
 
-def infer_modality(model: str) -> str:
-    """自动判定模型模态能力，返回 MODALITY_CATEGORIES 的 key。
+def _explicit_capability(model: str):
+    """读取 models_meta.modalities 的人工覆盖，返回 (modality, reasoning)；无覆盖返回 (None, None)。
 
-    优先级：models_meta.modalities 显式覆盖 > 名称启发规则 >
-    supports_vision 策展 > 图像理解命名兜底 > 默认纯文本。
-    显式覆盖值必须是合法类别，否则忽略并回退自动判定（防手误写死）。
+    兼容两种写法：字符串 "vision"（只管模态）或对象 {"modality": ..., "reasoning": ...}。
+    非法模态值一律忽略（防手误写死），reasoning 非布尔也忽略并回退自动判定。
+    """
+    entry = MODEL_MODALITIES.get(normalize_model(model)) or MODEL_MODALITIES.get(model)
+    if isinstance(entry, str):
+        return (entry, None) if entry in MODALITY_CATEGORIES else (None, None)
+    if isinstance(entry, dict):
+        mod = entry.get("modality")
+        reason = entry.get("reasoning")
+        return (mod if mod in MODALITY_CATEGORIES else None,
+                reason if isinstance(reason, bool) else None)
+    return (None, None)
+
+
+def infer_capabilities(model: str) -> dict:
+    """判定模型能力，返回 {"modality": <key>, "reasoning": bool}。
+
+    优先级：models_meta.modalities 人工覆盖 > 家族知识库 MODEL_CAPABILITY_KB >
+    supports_vision 策展 > 命名兜底 > 默认纯文本。
+    人工覆盖里未显式给出的维度继续走自动判定（可只纠偏其中一项）。
     """
     norm = normalize_model(model)
-    explicit = MODEL_MODALITIES.get(norm) or MODEL_MODALITIES.get(model)
-    if explicit in MODALITY_CATEGORIES:
-        return explicit
-    for kind, patterns in MODALITY_RULES:
-        if any(p in norm for p in patterns):
-            return kind
-    if is_vision_model(model):
-        return "vision"
-    if any(p in norm for p in MODALITY_VISION_HINTS):
-        return "vision"
-    return "text"
+    explicit_mod, explicit_reason = _explicit_capability(model)
+
+    modality, reasoning = None, False
+    for pattern, kind, reason in MODEL_CAPABILITY_KB:
+        if re.search(pattern, norm):
+            modality, reasoning = kind, reason
+            break
+    if modality is None:
+        if is_vision_model(model) or any(p in norm for p in MODALITY_VISION_HINTS):
+            modality = "vision"
+        else:
+            modality = "text"
+
+    if explicit_mod:
+        modality = explicit_mod
+    if explicit_reason is not None:
+        reasoning = explicit_reason
+    return {"modality": modality, "reasoning": bool(reasoning)}
+
+
+def infer_modality(model: str) -> str:
+    """自动判定模型模态能力，返回 MODALITY_CATEGORIES 的 key（保留旧签名）。"""
+    return infer_capabilities(model)["modality"]
+
+
+def infer_reasoning(model: str) -> bool:
+    """该模型是否支持深度思考（思考链 / reasoning 模式）。"""
+    return infer_capabilities(model)["reasoning"]
 
 
 def is_1m_model(model: str) -> bool:
@@ -1276,6 +1339,40 @@ async def delete_context_limit(model: str, _=Depends(verify_admin)):
 @app.get("/api/routers")
 async def get_routers_api(_=Depends(verify_admin)):
     return {"ok": True, "data": ROUTERS}
+
+
+class CapabilityUpdate(BaseModel):
+    model: str
+    modality: str = "auto"            # 8 个能力 key 之一；"auto" 表示恢复自动判定
+    reasoning: Optional[bool] = None  # None 表示恢复自动判定
+
+
+@app.post("/api/model-capability")
+async def update_model_capability(req: CapabilityUpdate, _=Depends(verify_admin)):
+    """人工纠正某模型的能力判定，落盘 models_meta.json 的 modalities 表并即时生效。
+
+    只写入显式给出的维度：modality="auto" 或 reasoning=None 表示该维度回落自动判定；
+    两者都不显式给出时删除整条覆盖。下次 /v1/models 即返回纠正后的结果。
+    """
+    global MODEL_MODALITIES, meta
+    if req.modality != "auto" and req.modality not in MODALITY_CATEGORIES:
+        return {"ok": False, "error": "未知的能力类别"}
+    key = normalize_model(req.model)
+    meta = load_meta()
+    table = meta.setdefault("modalities", {})
+    entry = {}
+    if req.modality != "auto":
+        entry["modality"] = req.modality
+    if req.reasoning is not None:
+        entry["reasoning"] = bool(req.reasoning)
+    if entry:
+        table[key] = entry
+    else:
+        table.pop(key, None)
+    MODEL_MODALITIES = table
+    atomic_write(META_FILE, json.dumps(meta, indent=2, ensure_ascii=False))
+    _models_cache["data"] = None      # 立即失效，下次拉取重算
+    return {"ok": True, "data": infer_capabilities(req.model)}
 
 @app.post("/api/routers")
 async def save_routers_api(request: Request, _=Depends(verify_admin)):
@@ -2442,6 +2539,7 @@ async def proxy_models():
             "owned_by": "Router",
             "available": True,
             "modality": "router",
+            "reasoning": False,
         })
 
     for p in providers:
@@ -2454,6 +2552,7 @@ async def proxy_models():
             # 三态：unknown/None -> True（乐观），ok -> True，fail/error -> False
             available = st in (None, "unknown", "ok")
             ctx_len = get_context_length(m)
+            caps = infer_capabilities(m)
             models_list.append({
                 "id": f"{p['name']}-{m}",
                 "object": "model",
@@ -2462,7 +2561,8 @@ async def proxy_models():
                 "context_length": ctx_len,
                 "max_position_embeddings": ctx_len,
                 "max_model_len": ctx_len,
-                "modality": infer_modality(m),
+                "modality": caps["modality"],
+                "reasoning": caps["reasoning"],
             })
     result = {"object": "list", "data": models_list}
     _models_cache["data"] = result

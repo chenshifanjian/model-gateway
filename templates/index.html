@@ -11,6 +11,7 @@
   color-scheme: light; /* 原生控件(下拉框/弹出层)永远按应用主题走，不跟系统跑 */
   --mac-bg: #F5F5F7;
   --mac-window-bg: rgba(255, 255, 255, 0.65);
+  --modal-bg: #FFFFFF;
   --mac-border: rgba(0, 0, 0, 0.1);
   --mac-border-highlight: rgba(255, 255, 255, 0.6);
   --text-primary: #1D1D1F;
@@ -31,6 +32,7 @@
   color-scheme: dark;
   --mac-bg: #1c1c1e;
   --mac-window-bg: rgba(30, 30, 30, 0.55);
+  --modal-bg: #1E1E20;
   --mac-border: rgba(255, 255, 255, 0.12);
   --mac-border-highlight: rgba(255, 255, 255, 0.2);
   --text-primary: #ffffff;
@@ -583,7 +585,7 @@ input:checked + .slider:before { transform: translateX(14px); }
 }
 .modal-overlay.show { display: flex; opacity: 1; }
 .modal-content {
-  background: var(--mac-window-bg); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  background: var(--modal-bg);
   width: 90%; max-width: 600px; max-height: 85vh; border-radius: 12px;
   border: 1px solid var(--mac-border); box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2);
   display: flex; flex-direction: column; overflow: hidden;
@@ -757,6 +759,56 @@ input:checked + .slider:before { transform: translateX(14px); }
 .update-actions { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
 .update-actions .btn-primary { padding:8px 20px; }
 
+/* ---------- 页头「更多」溢出菜单：低频入口收进菜单，减少按钮堆叠 ---------- */
+.header-menu-wrap { position: relative; }
+.header-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); min-width: 168px;
+  background: var(--modal-bg); border: 1px solid var(--mac-border);
+  border-radius: 10px; padding: 6px; z-index: 80; display: none;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+.header-menu.show { display: block; }
+.header-menu-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: none; border: none; cursor: pointer; font-family: inherit;
+  font-size: 13px; color: var(--text-primary); padding: 8px 10px;
+  border-radius: 7px; white-space: nowrap;
+}
+.header-menu-item:hover { background: rgba(0, 0, 0, 0.06); }
+[data-theme="dark"] .header-menu-item:hover { background: rgba(255, 255, 255, 0.08); }
+.header-menu-item.danger { color: var(--danger); }
+.header-menu-sep { height: 1px; background: var(--mac-border); margin: 4px 6px; }
+.main-tabs .btn { white-space: nowrap; }
+
+/* ---------- 深度思考徽章：能力的第二维度，与模态徽章并列 ---------- */
+.mod-badge.mod-reason { background: rgba(99, 102, 241, 0.12); color: #6366f1; border-color: rgba(99, 102, 241, 0.3); }
+[data-theme="dark"] .mod-badge.mod-reason { background: rgba(99, 102, 241, 0.2); color: #a5b4fc; }
+/* 能力筛选条里的分隔：把「模态」与「深度思考」两个维度在视觉上分开 */
+.chip-sep { width: 1px; align-self: stretch; min-height: 20px; background: var(--mac-border); margin: 2px 4px; display: inline-block; }
+.reason-chip { margin-left: 2px; }
+.mod-badge.clickable { cursor: pointer; }
+.mod-badge.clickable:hover { box-shadow: 0 0 0 2px rgba(60, 130, 246, 0.3); }
+
+/* 筛选栏分隔（模态单选区 | 深度思考开关） */
+.chip-sep { width: 1px; align-self: stretch; background: var(--mac-border); margin: 2px 2px; }
+.mod-chip.reason-chip.active { background: rgba(99, 102, 241, 0.14); border-color: rgba(99, 102, 241, 0.55); color: #6366f1; }
+[data-theme="dark"] .mod-chip.reason-chip.active { background: rgba(99, 102, 241, 0.22); color: #a5b4fc; }
+
+/* 图标按钮：危险态 + 紧凑尺寸（提供商卡片操作区） */
+.btn-icon.danger { color: var(--danger); }
+.btn-icon.danger:hover { background: rgba(239, 68, 68, 0.1); }
+.btn-icon.btn-icon-sm { width: 30px; height: 30px; font-size: 13px; border-radius: 7px; }
+
+/* 能力纠偏弹窗的选项行 */
+.cap-opt {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--mac-border); cursor: pointer; font-size: 13px;
+  color: var(--text-primary); background: var(--mac-window-bg);
+}
+.cap-opt:hover { border-color: rgba(60, 130, 246, 0.5); }
+.cap-opt.sel { border-color: #3b82f6; box-shadow: inset 0 0 0 1px #3b82f6; }
+.cap-opt .cap-opt-key { font-size: 11px; color: var(--text-secondary); font-family: ui-monospace, monospace; }
+.cap-opt .cap-opt-count { margin-left: auto; font-size: 11px; color: var(--text-secondary); }
 </style>
 </head>
 <body>
@@ -822,17 +874,23 @@ input:checked + .slider:before { transform: translateX(14px); }
           <button id="tab-usage" class="btn" onclick="switchMainTab('usage')" style="border: none; font-weight: 500; box-shadow: none; background: transparent; color: var(--text-secondary);">消耗统计</button>
         </div>
       </div>
-      <div style="display: flex; gap: 12px;">
-        <button class="btn" onclick="openRouterManager()">🔀 路由配置</button>
-        <button class="btn" onclick="openFeishuModal()" style="color: var(--danger)">📢 系统公告</button>
-        <button class="btn" onclick="checkUpdate(false)">🔄 检查更新</button>
-        <button class="btn btn-icon" onclick="event.stopPropagation(); openThemeMenu(this)" id="themeBtn" title="主题：跟随系统 / 浅色 / 深色">
-          🌙
-        </button>
+      <div style="display: flex; gap: 10px; align-items: center;">
         <button class="btn btn-primary" onclick="checkAll()" id="checkAllBtn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.1-8.54L2.5 9M2.5 9V3h6"/></svg>
           立即检测
         </button>
+        <button class="btn btn-icon" onclick="event.stopPropagation(); openThemeMenu(this)" id="themeBtn" title="主题：跟随系统 / 浅色 / 深色">
+          🌙
+        </button>
+        <div class="header-menu-wrap">
+          <button class="btn btn-icon" id="moreBtn" title="更多" onclick="event.stopPropagation(); toggleHeaderMenu()">⋯</button>
+          <div class="header-menu" id="headerMenu">
+            <button type="button" class="header-menu-item" onclick="closeHeaderMenu(); openRouterManager()">🔀 路由配置</button>
+            <div class="header-menu-sep"></div>
+            <button type="button" class="header-menu-item" onclick="closeHeaderMenu(); checkUpdate(false)">🔄 检查更新</button>
+            <button type="button" class="header-menu-item" onclick="closeHeaderMenu(); openFeishuModal()">📢 系统公告</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -979,17 +1037,48 @@ input:checked + .slider:before { transform: translateX(14px); }
 
 <!-- Output Models Modal -->
 <div class="modal-overlay" id="outputModelsModal" onclick="if(event.target===this) this.classList.remove('show')">
-  <div class="modal-content" style="max-width: 500px;">
+  <div class="modal-content" style="max-width: 760px;">
     <div class="modal-header">
       <div class="modal-title">📦 本地输出模型管理</div>
       <button type="button" class="modal-close" onclick="document.getElementById('outputModelsModal').classList.remove('show')" aria-label="关闭">×</button>
     </div>
     <div class="modal-body">
-      <p style="margin-top:0; font-size: 13px; color: var(--text-secondary);">以下模型名称由本网关自动聚合生成，能力标签自动辨别，您可以在第三方工具中直接使用它们。</p>
+      <p style="margin-top:0; font-size: 13px; color: var(--text-secondary);">以下模型名称由本网关自动聚合生成，能力标签自动辨别。<b>点击任一能力徽章可纠正判定</b>（人工纠正优先于自动规则），您可以在第三方工具中直接使用这些模型名。</p>
       <div id="outputModFilterBar" class="mod-filter-bar"></div>
-      <div id="outputModelList" style="margin-top: 10px; background: rgba(0,0,0,0.02); border: 1px solid var(--mac-border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto;">
+      <div id="outputModelList" style="margin-top: 10px; background: rgba(0,0,0,0.02); border: 1px solid var(--mac-border); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto;">
         <div class="empty">加载中...</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Capability Correction Modal -->
+<div class="modal-overlay" id="capModal" onclick="if(event.target===this) this.classList.remove('show')">
+  <div class="modal-content" style="max-width: 460px;">
+    <div class="modal-header">
+      <div class="modal-title">🔧 纠正能力判定</div>
+      <button type="button" class="modal-close" onclick="document.getElementById('capModal').classList.remove('show')" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">模型</div>
+      <div id="capModelName" style="font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-primary); margin-bottom: 14px; word-break: break-all; font-weight: 500;"></div>
+      <div style="font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--text-secondary);">模态能力</div>
+      <div id="capModOptions" style="display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto;"></div>
+      <div style="display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--text-primary);">
+        <span>🧠 深度思考</span>
+        <select id="capReasonSel" style="margin-left: auto; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--mac-border); background: var(--mac-window-bg); color: var(--text-primary); font-size: 13px; outline: none;">
+          <option value="auto">跟随自动判定</option>
+          <option value="yes">支持</option>
+          <option value="no">不支持</option>
+        </select>
+      </div>
+      <div style="margin-top: 12px; font-size: 12px; color: var(--text-secondary); line-height: 1.7;">
+        判定优先级：<b>人工纠正 &gt; 家族知识库 &gt; 名称/策展规则</b>。选择「自动判定」会清除该模型的人工纠正，回到自动结果。纠正结果写入 <code>models_meta.json</code> 并立即生效。
+      </div>
+    </div>
+    <div style="display: flex; justify-content: flex-end; gap: 8px; padding: 0 20px 20px;">
+      <button class="btn" onclick="document.getElementById('capModal').classList.remove('show')">取消</button>
+      <button class="btn btn-primary" id="capSaveBtn" onclick="saveCapability()">保存并应用</button>
     </div>
   </div>
 </div>
@@ -1430,10 +1519,10 @@ async function load() {
         <div class="provider-card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 6px; flex-wrap: wrap;">
             <div class="p-name" style="margin-bottom: 0;">${p.name} Configuration</div>
-            <div style="display: flex; gap: 6px; flex-shrink: 0;">
-              <button class="btn" style="padding: 4px 8px; font-size: 11px;" onclick="openModelManager('${p.name}')">⚙️ 模型</button>
-              <button class="btn" style="padding: 4px 8px; font-size: 11px;" onclick="openProviderEditor('${p.name}')">✏️ 编辑</button>
-              <button class="btn" style="padding: 4px 8px; font-size: 11px; color: var(--danger);" onclick="deleteProvider('${p.name}')">🗑 删除</button>
+            <div style="display: flex; gap: 4px; flex-shrink: 0; align-items: center;">
+              <button class="btn btn-icon btn-icon-sm" title="管理模型列表" onclick="openModelManager('${p.name}')">⚙️</button>
+              <button class="btn btn-icon btn-icon-sm" title="编辑提供商" onclick="openProviderEditor('${p.name}')">✏️</button>
+              <button class="btn btn-icon btn-icon-sm danger" title="删除提供商" onclick="deleteProvider('${p.name}')">🗑</button>
             </div>
           </div>
           <div class="copy-row">
@@ -1844,39 +1933,60 @@ const MODALITY_META = {
 };
 let outputModelsData = [];
 let outputModActive = 'all';
+let outputReasonOnly = false;
+let outputModelIndex = {};   // id -> {modality, reasoning}，纠偏弹窗取当前值用
+
+const REASON_META = { label: '深度思考', icon: '🧠', dot: '#6366f1' };
 
 function modBadge(mod) {
   const m = MODALITY_META[mod] || MODALITY_META.text;
   return `<span class="mod-badge mod-${mod}">${m.icon} ${m.label}</span>`;
 }
 
+function reasonBadge() {
+  return `<span class="mod-badge mod-reason">${REASON_META.icon} ${REASON_META.label}</span>`;
+}
+
+// 模型名进 data-* 属性前统一转义，避免把用户配置的字符串拼进内联 JS
+function escHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function renderOutputModChips() {
   const counts = { all: outputModelsData.length };
   outputModelsData.forEach(d => { counts[d.modality] = (counts[d.modality] || 0) + 1; });
+  const reasonCount = outputModelsData.filter(d => d.reasoning).length;
   let html = `<button class="mod-chip ${outputModActive === 'all' ? 'active' : ''}" onclick="setOutputModFilter('all')">全部<span class="chip-count">${counts.all}</span></button>`;
   for (const [key, m] of Object.entries(MODALITY_META)) {
     const n = counts[key] || 0;
     html += `<button class="mod-chip ${outputModActive === key ? 'active' : ''}" ${n === 0 ? 'style="opacity:0.45"' : ''} onclick="setOutputModFilter('${key}')"><span class="chip-dot" style="background:${m.dot}"></span>${m.icon} ${m.label}<span class="chip-count">${n}</span></button>`;
   }
+  html += `<span class="chip-sep"></span>
+    <button class="mod-chip reason-chip ${outputReasonOnly ? 'active' : ''}" ${reasonCount === 0 ? 'style="opacity:0.45"' : ''} onclick="toggleReasonFilter()"><span class="chip-dot" style="background:${REASON_META.dot}"></span>${REASON_META.icon} ${REASON_META.label}<span class="chip-count">${reasonCount}</span></button>`;
   document.getElementById('outputModFilterBar').innerHTML = html;
 }
 
 function renderOutputModelList() {
   const list = document.getElementById('outputModelList');
-  const rows = outputModelsData.filter(d => outputModActive === 'all' || d.modality === outputModActive);
+  const rows = outputModelsData.filter(d =>
+    (outputModActive === 'all' || d.modality === outputModActive) &&
+    (!outputReasonOnly || d.reasoning));
   if (rows.length === 0) {
-    list.innerHTML = '<div class="empty">该分类下暂无模型</div>';
+    list.innerHTML = '<div class="empty">该筛选下暂无模型</div>';
     return;
   }
   let html = '';
   rows.forEach(d => {
-    const m = d.id;
-    // 信任边界：m 来自本机 providers.json（用户自己的配置，与改动前同源同插法），
-    // d.modality 已在 openOutputModelsModal 经 MODALITY_META 白名单收敛为 8 个固定 key，不可注入。
+    const safe = escHtml(d.id);
+    // 信任边界：d.id 来自本机 providers.json（用户自己的配置），转义后写入属性；
+    // d.modality 已在 openOutputModelsModal 经 MODALITY_META 白名单收敛为固定 key。
     html += `
       <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; background: var(--mac-window-bg); border: 1px solid var(--mac-border); border-radius: 6px;">
-        <span style="display: flex; align-items: center; gap: 8px; min-width: 0;">${modBadge(d.modality)}<span style="font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${m}</span></span>
-        <button class="btn" style="padding: 4px 8px; font-size: 12px; flex-shrink: 0;" onclick="copyText('${m}', this)">Copy</button>
+        <span style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+          <span class="cap-trigger" data-model="${safe}" title="点击纠正能力判定" style="display:flex;gap:6px;align-items:center;cursor:pointer;flex-shrink:0;">${modBadge(d.modality)}${d.reasoning ? reasonBadge() : ''}</span>
+          <span style="font-family: ui-monospace, monospace; font-size: 13px; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safe}</span>
+        </span>
+        <button class="btn" style="padding: 4px 8px; font-size: 12px; flex-shrink: 0;" data-copy="${safe}" onclick="copyText(this.getAttribute('data-copy'), this)">复制</button>
       </div>`;
   });
   list.innerHTML = html;
@@ -1884,14 +1994,96 @@ function renderOutputModelList() {
 
 function setOutputModFilter(mod) {
   outputModActive = mod;
+  if (mod === 'all') outputReasonOnly = false;   // 「全部」= 重置全部筛选，避免"点了全部却只有部分"
   renderOutputModChips();
   renderOutputModelList();
+}
+
+function toggleReasonFilter() {
+  outputReasonOnly = !outputReasonOnly;
+  renderOutputModChips();
+  renderOutputModelList();
+}
+
+// ---- 能力纠偏：点徽章即可人工覆盖自动判定，落盘 models_meta.json ----
+let capTarget = null;
+let capMod = 'auto';
+
+function openCapEditor(modelId) {
+  const cur = outputModelIndex[modelId] || { modality: 'text', reasoning: false };
+  capTarget = modelId;
+  capMod = cur.modality;
+  document.getElementById('capModelName').textContent = modelId;
+  document.getElementById('capReasonSel').value = cur.reasoning ? 'yes' : 'no';
+  renderCapOptions();
+  document.getElementById('capModal').classList.add('show');
+}
+
+function renderCapOptions() {
+  const counts = {};
+  outputModelsData.forEach(d => { counts[d.modality] = (counts[d.modality] || 0) + 1; });
+  const auto = { label: '自动判定', icon: '✨', dot: 'var(--text-secondary)' };
+  let html = '';
+  [['auto', auto], ...Object.entries(MODALITY_META)].forEach(([key, m]) => {
+    const n = key === 'auto' ? '' : `<span class="cap-opt-count">${counts[key] || 0} 个</span>`;
+    html += `<div class="cap-opt ${capMod === key ? 'sel' : ''}" onclick="setCapMod('${key}')">
+      <span class="chip-dot" style="background:${m.dot}"></span>${m.icon} ${m.label}
+      ${key === 'auto' ? '' : `<span class="cap-opt-key">${key}</span>`}${n}</div>`;
+  });
+  document.getElementById('capModOptions').innerHTML = html;
+}
+
+function setCapMod(key) {
+  capMod = key;
+  renderCapOptions();
+}
+
+async function saveCapability() {
+  if (!capTarget) return;
+  const btn = document.getElementById('capSaveBtn');
+  const sel = document.getElementById('capReasonSel').value;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '保存中...';
+  try {
+    const res = await apiFetch('/api/model-capability', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: capTarget,
+        modality: capMod,
+        reasoning: sel === 'auto' ? null : (sel === 'yes'),
+      }),
+    });
+    const j = await res.json();
+    if (!j.ok) throw new Error(j.error || '保存失败');
+    const row = outputModelsData.find(d => d.id === capTarget);
+    if (row) { row.modality = j.data.modality; row.reasoning = !!j.data.reasoning; }
+    outputModelIndex[capTarget] = { modality: j.data.modality, reasoning: !!j.data.reasoning };
+    document.getElementById('capModal').classList.remove('show');
+    renderOutputModChips();
+    renderOutputModelList();
+  } catch (e) {
+    alert('保存失败：' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
 }
 
 async function openOutputModelsModal() {
   document.getElementById('outputModelsModal').classList.add('show');
   document.getElementById('outputModFilterBar').innerHTML = '';
   document.getElementById('outputModelList').innerHTML = '<div class="empty">获取中...</div>';
+  // 徽章点击 → 纠偏弹窗（事件委托挂在容器上，容器本身不随 innerHTML 重建）
+  const listEl = document.getElementById('outputModelList');
+  if (!listEl.dataset.capBound) {
+    listEl.addEventListener('click', e => {
+      const t = e.target.closest('.cap-trigger');
+      if (t) openCapEditor(t.getAttribute('data-model'));
+    });
+    listEl.dataset.capBound = '1';
+  }
   try {
     const res = await apiFetch('/v1/models');
     if (!res.ok) throw new Error('Failed to fetch models');
@@ -1899,19 +2091,37 @@ async function openOutputModelsModal() {
     outputModelsData = (data.data || []).map(m => ({
       id: m.id,
       modality: MODALITY_META[m.modality] ? m.modality : 'text',
+      reasoning: !!m.reasoning,
     })).sort((a, b) => a.id.localeCompare(b.id));
+    outputModelIndex = {};
+    outputModelsData.forEach(d => { outputModelIndex[d.id] = { modality: d.modality, reasoning: d.reasoning }; });
 
     if (outputModelsData.length === 0) {
       document.getElementById('outputModelList').innerHTML = '<div class="empty">暂无可输出模型</div>';
       return;
     }
     outputModActive = 'all';
+    outputReasonOnly = false;
     renderOutputModChips();
     renderOutputModelList();
   } catch (e) {
     document.getElementById('outputModelList').innerHTML = '<div class="empty" style="color:var(--danger)">获取失败</div>';
   }
 }
+
+// ---- 页头「更多」菜单 ----
+function toggleHeaderMenu() {
+  document.getElementById('headerMenu').classList.toggle('show');
+}
+
+function closeHeaderMenu() {
+  const m = document.getElementById('headerMenu');
+  if (m) m.classList.remove('show');
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.header-menu-wrap')) closeHeaderMenu();
+});
 
 function showProviderMsg(msg, type) {
   const el = document.getElementById('providerModalMsg');

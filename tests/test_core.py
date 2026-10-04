@@ -1,4 +1,5 @@
 import pytest
+import json
 import sys
 from pathlib import Path
 
@@ -506,10 +507,10 @@ def test_call_log_no_100_cap():
 
 
 def test_infer_modality_rules():
-    """模态能力自动辨别：七类规则 + 显式覆盖 + 兜底。"""
+    """模态能力自动辨别：家族知识库 + 显式覆盖 + 兜底。"""
     im = app_module.infer_modality
     # 默认纯文本
-    assert im("deepseek-v4-flash") == "text"
+    assert im("meta/llama2-70b") == "text"
     # 向量模型防带偏（不吃 gemini/embedding 命名的生成/全模态规则）
     assert im("google/gemini-embedding-001") == "text"
     assert im("text-embedding-3-small") == "text"
@@ -538,11 +539,29 @@ def test_infer_modality_rules():
     assert im("gpt-4o-mini-tts") != "omni"
     # gpt-4o-mini 只是图像理解，不是全模态
     assert im("gpt-4o-mini") == "vision"
-    # 显式覆盖（models_meta.modalities）优先于一切规则
+    # 家族知识库：纠正 v1 的误判（均为用户实盘在用的模型）
+    assert im("deepseek-ai/deepseek-v4-flash") == "vision"   # V4 Flash：原生多模态视觉
+    assert im("deepseek-ai/deepseek-v4-pro") == "vision"     # V4 Pro 正式版：支持图像推理
+    assert im("google/gemma-3-12b-it") == "vision"
+    assert im("google/gemma-4-31b-it") == "omni"
+    assert im("Qwen/Qwen3.5-122B-A10B") == "vision"
+    assert im("moonshotai/kimi-k3") == "omni"
+    assert im("moonshotai/kimi-k2.6") == "vision"
+    assert im("mimo-v2.5") == "omni"
+    assert im("mimo-v2.5-pro") == "omni"                      # 官方模型卡：V2.5 全系输入含图像/视频/音频
+    assert im("MiniMax/MiniMax-M3") == "vision"
+    assert im("z-ai/glm-5.2") == "text"
+    assert im("mistralai/mistral-large-3-675b-instruct-2512") == "vision"
+    assert im("sensenova-u1-fast") == "image_gen"
+    # 显式覆盖（models_meta.modalities）优先于一切规则：字符串 & 对象两种写法
     monkeypatch_key = "my-legacy-model"
     app_module.MODEL_MODALITIES[monkeypatch_key] = "video_gen"
     try:
         assert im(monkeypatch_key) == "video_gen"
+        # 对象写法可精确到单个维度（模态 + 深度思考）
+        app_module.MODEL_MODALITIES[monkeypatch_key] = {"modality": "omni", "reasoning": True}
+        assert im(monkeypatch_key) == "omni"
+        assert app_module.infer_reasoning(monkeypatch_key) is True
         # 非法覆盖值被忽略，回退自动判定
         app_module.MODEL_MODALITIES[monkeypatch_key] = "banana"
         assert im(monkeypatch_key) == "text"
@@ -570,13 +589,78 @@ def test_v1_models_modality_field(monkeypatch):
     assert resp.status_code == 200
     data = resp.json()["data"]
     by_id = {d["id"]: d for d in data}
-    assert by_id["P1-deepseek-v4-flash"]["modality"] == "text"
+    assert by_id["P1-deepseek-v4-flash"]["modality"] == "vision"
     assert by_id["P1-Qwen/Qwen3-VL-8B-Instruct"]["modality"] == "vision"
     assert by_id["P1-sora-2"]["modality"] == "video_gen"
     assert by_id["P1-whisper-large-v3"]["modality"] == "audio_in"
     assert by_id["myroute"]["modality"] == "router"
-    # 每项都必须有 modality 且值合法
+    # 深度思考字段：每项都带且为布尔
+    assert by_id["P1-deepseek-v4-flash"]["reasoning"] is True
+    assert by_id["myroute"]["reasoning"] is False
+    # 每项都必须有 modality（合法类别）与 reasoning（布尔）
     for d in data:
         assert d.get("modality") in app_module.MODALITY_CATEGORIES, d
+        assert isinstance(d.get("reasoning"), bool), d
     # 复位缓存，避免污染其他用例
     app_module._models_cache["data"] = None
+
+
+def test_infer_reasoning_rules():
+    """深度思考能力辨别：思考型家族为真，普通模型为假。"""
+    ir = app_module.infer_reasoning
+    # 思考型
+    assert ir("deepseek-v4-flash") is True
+    assert ir("deepseek-ai/deepseek-v4-pro") is True
+    assert ir("Qwen/Qwen3.5-397B-A17B") is True
+    assert ir("moonshotai/kimi-k3") is True
+    assert ir("z-ai/glm-5.3-flash") is True
+    assert ir("mimo-v2.6-pro") is True
+    assert ir("nvidia/nemotron-3-super-120b-a12b") is True
+    assert ir("openai/gpt-oss-20b") is True
+    assert ir("deepseek-r1") is True
+    assert ir("some/thinking-model") is True
+    # 非思考型
+    assert ir("google/gemma-3-12b-it") is False
+    assert ir("meta/llama-3.2-11b-vision-instruct") is False
+    assert ir("Qwen/Qwen3-VL-8B-Instruct") is False
+    assert ir("mistralai/mistral-large-3-675b-instruct-2512") is False
+    assert ir("meta/llama2-70b") is False
+
+
+def test_infer_capabilities_shape():
+    """infer_capabilities 返回 {modality, reasoning} 且模态值合法。"""
+    caps = app_module.infer_capabilities("Qwen/Qwen3.5-27B")
+    assert caps == {"modality": "vision", "reasoning": True}
+    assert set(app_module.infer_capabilities("sensenova-u1-fast")) == {"modality", "reasoning"}
+
+
+def test_model_capability_endpoint(monkeypatch, tmp_path):
+    """/api/model-capability 落盘人工覆盖，清空后回落自动判定。"""
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(app_module, "META_FILE", tmp_path / "models_meta.json")
+    saved = dict(app_module.MODEL_MODALITIES)
+    try:
+        client = TestClient(app_module.app)
+        headers = {"Authorization": "Bearer " + app_module.LOCAL_API_KEY}
+        # 非法类别被拒
+        r = client.post("/api/model-capability", headers=headers,
+                        json={"model": "foo-bar", "modality": "banana"})
+        assert r.status_code == 200 and r.json()["ok"] is False
+        # 写入覆盖（模态 + 深度思考）
+        r = client.post("/api/model-capability", headers=headers,
+                        json={"model": "foo-bar", "modality": "omni", "reasoning": True})
+        assert r.json()["ok"] is True
+        assert r.json()["data"] == {"modality": "omni", "reasoning": True}
+        assert app_module.infer_modality("foo-bar") == "omni"
+        assert app_module.infer_reasoning("foo-bar") is True
+        # 落盘可读
+        on_disk = json.loads((tmp_path / "models_meta.json").read_text(encoding="utf-8"))
+        assert on_disk["modalities"]["foo-bar"]["modality"] == "omni"
+        # 清空覆盖 → 回落自动判定
+        r = client.post("/api/model-capability", headers=headers, json={"model": "foo-bar"})
+        assert r.json()["ok"] is True
+        assert app_module.infer_modality("foo-bar") == "text"
+        assert "foo-bar" not in app_module.MODEL_MODALITIES
+    finally:
+        app_module.MODEL_MODALITIES.clear()
+        app_module.MODEL_MODALITIES.update(saved)
