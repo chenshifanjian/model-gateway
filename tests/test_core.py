@@ -589,13 +589,13 @@ def test_v1_models_modality_field(monkeypatch):
     assert resp.status_code == 200
     data = resp.json()["data"]
     by_id = {d["id"]: d for d in data}
-    assert by_id["P1-deepseek-v4-flash"]["modality"] == "vision"
-    assert by_id["P1-Qwen/Qwen3-VL-8B-Instruct"]["modality"] == "vision"
-    assert by_id["P1-sora-2"]["modality"] == "video_gen"
-    assert by_id["P1-whisper-large-v3"]["modality"] == "audio_in"
+    assert by_id["P1/deepseek-v4-flash"]["modality"] == "vision"
+    assert by_id["P1/Qwen/Qwen3-VL-8B-Instruct"]["modality"] == "vision"
+    assert by_id["P1/sora-2"]["modality"] == "video_gen"
+    assert by_id["P1/whisper-large-v3"]["modality"] == "audio_in"
     assert by_id["myroute"]["modality"] == "router"
     # 深度思考字段：每项都带且为布尔
-    assert by_id["P1-deepseek-v4-flash"]["reasoning"] is True
+    assert by_id["P1/deepseek-v4-flash"]["reasoning"] is True
     assert by_id["myroute"]["reasoning"] is False
     # 每项都必须有 modality（合法类别）与 reasoning（布尔）
     for d in data:
@@ -752,3 +752,77 @@ def test_version_json_matches_app_version_and_has_assets():
             "https://github.com/chenshifanjian/model-reservoir/releases/download/v" + data["version"] + "/")
     assert data["release_notes"].strip()
     assert data["release_page"].startswith("https://github.com/chenshifanjian/model-reservoir/releases")
+
+
+# ============================================================
+# 对外模型名写法：统一为「供应商/模型名」（斜杠分隔）
+# ============================================================
+def test_local_model_id_uses_slash():
+    assert app_module.local_model_id("SenseNova", "kimi-k3") == "SenseNova/kimi-k3"
+    assert app_module.local_model_id("mimo_token_plan", "mimo-v2.6-flash") == "mimo_token_plan/mimo-v2.6-flash"
+    # 模型名自带斜杠：只加一层供应商前缀，模型名原样保留
+    assert app_module.local_model_id("魔搭", "deepseek-ai/DeepSeek-V4-Pro") == "魔搭/deepseek-ai/DeepSeek-V4-Pro"
+    # 供应商名自带连字符也不能被拆开
+    assert app_module.local_model_id("示例甲-通用", "gpt-x-4o") == "示例甲-通用/gpt-x-4o"
+
+
+def test_model_id_matches_accepts_three_forms():
+    p, m = "SenseNova", "kimi-k3"
+    assert app_module.model_id_matches("kimi-k3", p, m)              # 裸模型名
+    assert app_module.model_id_matches("SenseNova/kimi-k3", p, m)    # 标准写法
+    assert app_module.model_id_matches("SenseNova-kimi-k3", p, m)    # 历史写法（兼容旧客户端）
+    assert not app_module.model_id_matches("Other/kimi-k3", p, m)
+    assert not app_module.model_id_matches("kimi-k4", p, m)
+    assert not app_module.model_id_matches("", p, m)
+    assert not app_module.model_id_matches(None, p, m)
+
+
+def test_pick_accepts_slash_prefixed_model(monkeypatch):
+    monkeypatch.setattr(app_module, "providers", [provider(name="SenseNova", models=["kimi-k3"])])
+    monkeypatch.setattr(app_module, "health_status", {})
+    cands = app_module.pick_available_models("SenseNova/kimi-k3")
+    assert [(p["name"], m) for p, m in cands] == [("SenseNova", "kimi-k3")]
+
+
+def test_pick_accepts_legacy_hyphen_prefixed_model(monkeypatch):
+    monkeypatch.setattr(app_module, "providers", [provider(name="SenseNova", models=["kimi-k3"])])
+    monkeypatch.setattr(app_module, "health_status", {})
+    cands = app_module.pick_available_models("SenseNova-kimi-k3")
+    assert [(p["name"], m) for p, m in cands] == [("SenseNova", "kimi-k3")]
+
+
+def test_pick_slash_prefix_scopes_to_named_provider(monkeypatch):
+    """同名模型挂在两个供应商下时，带供应商前缀的写法必须只命中那一个"""
+    monkeypatch.setattr(app_module, "providers", [
+        provider(name="甲", models=["kimi-k3"]),
+        provider(name="乙", models=["kimi-k3"]),
+    ])
+    monkeypatch.setattr(app_module, "health_status", {})
+    cands = app_module.pick_available_models("甲/kimi-k3")
+    assert [(p["name"], m) for p, m in cands] == [("甲", "kimi-k3")]
+
+
+def test_models_endpoint_ids_use_slash_and_roundtrip(monkeypatch):
+    """界面「本地输出模型管理」的列表直接取 /v1/models 的 id：
+    每个 id 必须是「供应商/模型名」，且原样贴回去必须能命中同一供应商。"""
+    from fastapi.testclient import TestClient
+
+    fake = [
+        provider(name="SenseNova", models=["kimi-k3"]),
+        provider(name="魔搭", models=["deepseek-ai/DeepSeek-V4-Pro"]),
+    ]
+    monkeypatch.setattr(app_module, "providers", fake)
+    monkeypatch.setattr(app_module, "ROUTERS", {})
+    monkeypatch.setattr(app_module, "health_status", {})
+    app_module._models_cache["data"] = None
+
+    client = TestClient(app_module.app)  # 不进 with：跳过 lifespan/后台任务
+    res = client.get("/v1/models", headers={"Authorization": f"Bearer {app_module.LOCAL_API_KEY}"})
+    assert res.status_code == 200
+    ids = [m["id"] for m in res.json()["data"]]
+    assert ids == ["SenseNova/kimi-k3", "魔搭/deepseek-ai/DeepSeek-V4-Pro"]
+    # 生成规则 == 唯一拼法，且每个 id 回填后仍命中它自己的供应商
+    for item in res.json()["data"]:
+        assert item["id"] == app_module.local_model_id(item["owned_by"], item["id"].split("/", 1)[1])
+        assert app_module.model_id_matches(item["id"], item["owned_by"], item["id"].split("/", 1)[1])
+    app_module._models_cache["data"] = None

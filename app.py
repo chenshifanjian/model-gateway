@@ -488,6 +488,32 @@ def normalize_model(model: str) -> str:
     return model.split('/')[-1].lower()
 
 
+# ---------- 对外模型名写法（统一规范：供应商/模型名） ----------
+MODEL_ID_SEP = "/"
+
+
+def local_model_id(provider_name: str, model: str) -> str:
+    """对外模型名的唯一拼法：`供应商/模型名`（斜杠分隔）。
+
+    这是用户拍定的规则，任何面向客户端或界面的地方都必须走本函数，
+    不要再手写 f"{provider}-{model}" 或 f"{provider} · {model}" 之类的临时拼法。
+    """
+    return f"{provider_name}{MODEL_ID_SEP}{model}"
+
+
+def model_id_matches(requested: str, provider_name: str, model: str) -> bool:
+    """判断请求里的 model 是否指向 (供应商, 模型名)。
+
+    接受三种写法：裸模型名、标准 `供应商/模型名`、历史 `供应商-模型名`
+    （旧写法保留兼容，避免已配好的第三方客户端挂掉）。
+    """
+    if not requested:
+        return False
+    return requested in (model,
+                         f"{provider_name}{MODEL_ID_SEP}{model}",
+                         f"{provider_name}-{model}")
+
+
 def get_context_length(model: str) -> int:
     # ① 归一化名查表
     norm = normalize_model(model)
@@ -1018,8 +1044,8 @@ def pick_available_models(model: str | None = None, force: bool = False) -> list
     # 否则按具体模型匹配
     for p in providers:
         for m in get_enabled_models(p):
-            prefixed = f"{p['name']}-{m}"
-            if model and model != m and model != prefixed:
+            # 请求里的 model 命中本供应商的任一写法（裸名 / 供应商/模型名 / 旧供应商-模型名）
+            if model and not model_id_matches(model, p["name"], m):
                 continue
             k = f"{p['name']}||{m}"
             if force or model:
@@ -1256,7 +1282,7 @@ async def get_usage(days: int = 1, _=Depends(verify_admin)):
         d["ct"] += ct
         d["tt"] += tt
         d["requests"] += 1
-        mk = f"{p} · {m}"
+        mk = local_model_id(p, m)
         mm = by_model.setdefault(mk, {"pt": 0, "ct": 0, "tt": 0, "requests": 0, "provider": p, "model": m})
         mm["pt"] += pt
         mm["ct"] += ct
@@ -2165,7 +2191,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                             if obj.get("usage"):
                                 usage_obj = obj["usage"]
                             if "model" in obj and isinstance(obj["model"], str):
-                                obj["model"] = f"{provider['name']} · {model}"
+                                obj["model"] = local_model_id(provider["name"], model)
                             choices = obj.get("choices") or []
                             if choices:
                                 delta = choices[0].get("delta") or {}
@@ -2181,7 +2207,7 @@ async def _stream_with_failover(candidates, body, is_router, prelude: str = ""):
                                     delta2 = choices2[0].get("delta") or {}
                                     c2 = delta2.get("content")
                                     if isinstance(c2, str) and c2:
-                                        delta2["content"] = f"🤖 {provider['name']} · {model}\n\n{c2}"
+                                        delta2["content"] = f"🤖 {local_model_id(provider['name'], model)}\n\n{c2}"
                                         prefix_done = True
                             out = json.dumps(obj, ensure_ascii=False)
                             out = restore_hermes_text(out)
@@ -2309,7 +2335,7 @@ async def proxy_chat(request: Request, force: bool = False):
                     parsed_str = restore_hermes_text(parsed_str)
                     parsed = json.loads(parsed_str)
                     record_success(k)
-                    parsed["model"] = f"{provider['name']} · {model}"
+                    parsed["model"] = local_model_id(provider["name"], model)
                     try:
                         u = parsed.get("usage") or {}
                         pt = u.get("prompt_tokens", 0) or 0
@@ -2336,7 +2362,7 @@ async def proxy_chat(request: Request, force: bool = False):
                         prefix_parts = []
                         if vision_prelude:
                             prefix_parts.append(vision_prelude.rstrip())
-                        prefix_parts.append(f"🤖 {provider['name']} · {model}")
+                        prefix_parts.append(f"🤖 {local_model_id(provider['name'], model)}")
                         prefix = "\n\n".join(prefix_parts)
                         if isinstance(c, str) and c:
                             msg["content"] = f"{prefix}\n\n{c}"
@@ -2602,7 +2628,7 @@ async def proxy_models():
             ctx_len = get_context_length(m)
             caps = infer_capabilities(m)
             models_list.append({
-                "id": f"{p['name']}-{m}",
+                "id": local_model_id(p["name"], m),
                 "object": "model",
                 "owned_by": p["name"],
                 "available": available,
