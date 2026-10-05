@@ -26,6 +26,12 @@
   --danger-bg: rgba(255, 59, 48, 0.1);
   --unknown: #8E8E93;
   --glass-blur: blur(40px) saturate(200%);
+  /* 应用底纹：极淡的靛蓝／蓝／紫光晕，避免整窗死板纯色 */
+  --app-backdrop:
+    radial-gradient(ellipse at 10% 20%, rgba(94, 92, 230, 0.05) 0%, transparent 40%),
+    radial-gradient(ellipse at 90% 80%, rgba(10, 132, 255, 0.05) 0%, transparent 40%),
+    radial-gradient(ellipse at 50% 10%, rgba(191, 90, 242, 0.03) 0%, transparent 50%);
+  --chrome-bg: rgba(245, 245, 247, 0.72);
 }
 
 [data-theme="dark"] {
@@ -47,6 +53,14 @@
   --danger-bg: rgba(255, 69, 58, 0.15);
   --unknown: #98989D;
   --glass-blur: blur(30px) saturate(180%);
+  /* 应用底纹：靛蓝／蓝／紫柔和光晕（沿用旧版配色）＋底部自然暗角；
+     旧版这层在毛玻璃后面只透出约 45%，直接画在不透明表面上需按比例折半，否则发雾 */
+  --app-backdrop:
+    radial-gradient(ellipse at 10% 20%, rgba(94, 92, 230, 0.20) 0%, transparent 44%),
+    radial-gradient(ellipse at 90% 80%, rgba(10, 132, 255, 0.17) 0%, transparent 44%),
+    radial-gradient(ellipse at 50% 8%, rgba(191, 90, 242, 0.11) 0%, transparent 54%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.14) 100%);
+  --chrome-bg: rgba(28, 28, 30, 0.72);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -86,6 +100,8 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--mac-bg);
+  background-image: var(--app-backdrop);
+  background-attachment: fixed;
   overflow: hidden;
   transition: background 0.3s ease;
 }
@@ -776,7 +792,7 @@ button, label, .nav-tab, .seg-btn, .header-menu-item, .filter-label, .app-versio
   gap: 12px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--mac-border);
-  background: var(--mac-bg);
+  background: var(--chrome-bg);
   position: relative;
   z-index: 20;
 }
