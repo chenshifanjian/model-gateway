@@ -1,9 +1,9 @@
 {
-  "version": "1.7.1",
+  "version": "1.7.2",
   "min_version": "",
-  "release_page": "https://github.com/chenshifanjian/model-reservoir/releases/tag/v1.7.1",
-  "release_notes": "v1.7.1：对外模型名统一为「供应商/模型名」（斜杠分隔），修复同一模型出现连字符/中点等多种拼法的问题；深色主题恢复靛蓝/蓝/紫底纹，不再是一块纯色。旧写法（供应商-模型名、裸模型名）的调用请求仍然可用。",
-  "download_url_windows": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.1/ModelReservoir-v1.7.1-windows.exe",
-  "download_url_linux": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.1/ModelReservoir-v1.7.1-linux-x86_64",
-  "download_url_macos": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.1/ModelReservoir-v1.7.1-macos.zip"
+  "release_page": "https://github.com/chenshifanjian/model-reservoir/releases/tag/v1.7.2",
+  "release_notes": "v1.7.2：修一处监控页的显示问题——以前「模型可用性」只列出成功过的模型（本机 112 个只显示 55 个），现在声明过的模型全部列出，并且「服务异常（<50%）」筛选档终于能筛到真正 0% 的模型。每行还标出失败原因（上游无此模型 / 模型已下线 / 触发限流 / 无权限·不在套餐…），重启后不再空白。",
+  "download_url_windows": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.2/ModelReservoir-v1.7.2-windows.exe",
+  "download_url_linux": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.2/ModelReservoir-v1.7.2-linux-x86_64",
+  "download_url_macos": "https://github.com/chenshifanjian/model-reservoir/releases/download/v1.7.2/ModelReservoir-v1.7.2-macos.zip"
 }
