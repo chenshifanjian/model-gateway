@@ -826,3 +826,95 @@ def test_models_endpoint_ids_use_slash_and_roundtrip(monkeypatch):
         assert item["id"] == app_module.local_model_id(item["owned_by"], item["id"].split("/", 1)[1])
         assert app_module.model_id_matches(item["id"], item["owned_by"], item["id"].split("/", 1)[1])
     app_module._models_cache["data"] = None
+
+
+# ============================================================
+# 监控页「模型可用性」：声明过的模型一个都不能少（v1.7.2 修复）
+# 旧实现把「探过但一次都没成功」的模型整行删掉 → 112 个模型只列 55 个，
+# 且「服务异常（<50%）」筛选永远筛不到 0% 的那批。
+# ============================================================
+def test_classify_probe_failure_maps_codes():
+    f = app_module.classify_probe_failure
+    assert f(429, "fail") == "触发限流"
+    assert f(404, "fail") == "上游无此模型"
+    assert f(410, "fail") == "模型已下线"
+    assert f(403, "fail") == "无权限 / 不在套餐"
+    assert f(400, "fail") == "请求被拒（不支持该调用）"
+    assert f(503, "fail") == "上游故障"
+    assert f(418, "fail") == "HTTP 418"
+    assert f(None, "error", "httpx.ReadTimeout") == "探测超时"
+    assert f(None, "error", "boom") == "探测异常"
+    assert f(None, "error") == "探测异常"
+
+
+def test_stability_rows_keep_never_succeeded_models():
+    allowed = ["A||ok模型", "A||死模型", "B||没探过"]
+    stats = {
+        "A||ok模型": {"ok": 2, "fail": 0, "error": 0, "total": 2, "latencies": [100, 140]},
+        "A||死模型": {"ok": 0, "fail": 2, "error": 0, "total": 2, "latencies": []},
+    }
+    health = {
+        "A||ok模型": {"status": "ok", "code": 200},
+        "A||死模型": {"status": "fail", "code": 410, "detail": "gone"},
+        "B||没探过": {"status": "ok", "code": 200},
+    }
+    rows = app_module.build_stability_rows(stats, allowed, health)
+    # 条数 == 声明数：不隐藏任何模型
+    assert len(rows) == len(allowed) == 3
+    # 排序：可用率高的在前 → 0% 沉底 → 未巡检的垫底
+    assert [(r["provider"], r["model"]) for r in rows] == [("A", "ok模型"), ("A", "死模型"), ("B", "没探过")]
+    assert rows[0]["availability"] == 100.0 and rows[0]["last_reason"] is None
+    dead = rows[1]
+    assert dead["availability"] == 0.0
+    assert dead["last_code"] == 410 and dead["last_reason"] == "模型已下线"
+    assert dead["fail"] == 2 and dead["ok"] == 0
+    unprobed = rows[2]
+    assert unprobed["checks"] == 0 and unprobed["availability"] is None  # 页面显示 "--" 而不是 0.0%
+
+
+async def _fake_read_history(hours=24):
+    return [{"time": 1.0, "data": {
+        "A||m1": {"status": "ok", "latency_ms": 100},
+        "A||m2": {"status": "fail", "latency_ms": 30, "code": 410, "detail": "gone"},
+    }}]
+
+
+def test_stability_endpoint_lists_every_declared_model(monkeypatch):
+    """接口层：条数 == 提供商声明去重后的模型数（含从没成功过的）"""
+    from fastapi.testclient import TestClient
+
+    fake = [provider(name="A", models=["m1", "m2"]), provider(name="B", models=["m3"])]
+    monkeypatch.setattr(app_module, "providers", fake)
+    # 内存里还没有巡检结果（应用刚启动）→ 原因必须能从历史记录里兜底
+    monkeypatch.setattr(app_module, "health_status", {})
+    monkeypatch.setattr(app_module, "read_history", _fake_read_history)
+    app_module._stability_cache.clear()
+
+    client = TestClient(app_module.app)  # 不进 with：跳过 lifespan/后台任务
+    res = client.get("/api/stability?hours=24", headers={"Authorization": f"Bearer {app_module.LOCAL_API_KEY}"})
+    assert res.status_code == 200
+    data = res.json()
+    assert len(data) == 3
+    m2 = [r for r in data if r["model"] == "m2"][0]
+    assert m2["checks"] == 1 and m2["ok"] == 0 and m2["availability"] == 0.0
+    assert m2["last_code"] == 410 and m2["last_reason"] == "模型已下线"
+    m3 = [r for r in data if r["model"] == "m3"][0]
+    assert m3["checks"] == 0 and m3["availability"] is None and m3["last_reason"] is None
+    app_module._stability_cache.clear()
+
+
+def test_stability_endpoint_prefers_live_health_over_history(monkeypatch):
+    """内存里的实时巡检结果比历史记录新，优先采用"""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(app_module, "providers", [provider(name="A", models=["m2"])])
+    monkeypatch.setattr(app_module, "health_status", {"A||m2": {"status": "fail", "code": 429, "detail": "rate"}})
+    monkeypatch.setattr(app_module, "read_history", _fake_read_history)
+    app_module._stability_cache.clear()
+
+    client = TestClient(app_module.app)
+    res = client.get("/api/stability?hours=24", headers={"Authorization": f"Bearer {app_module.LOCAL_API_KEY}"})
+    assert res.status_code == 200
+    m2 = res.json()[0]
+    assert m2["last_code"] == 429 and m2["last_reason"] == "触发限流"
+    app_module._stability_cache.clear()

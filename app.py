@@ -1201,6 +1201,69 @@ _stability_cache: dict = {}
 STABILITY_CACHE_TTL = 30
 
 
+def classify_probe_failure(code, status, detail: str = "") -> str:
+    """把一次失败的巡检归类成给人看的一行原因（监控页用）"""
+    d = (detail or "").lower()
+    if status == "error" or code is None:
+        if "timeout" in d or "timed out" in d:
+            return "探测超时"
+        return "探测异常"
+    if code == 400:
+        return "请求被拒（不支持该调用）"
+    if code == 401:
+        return "鉴权失败"
+    if code == 403:
+        return "无权限 / 不在套餐"
+    if code == 404:
+        return "上游无此模型"
+    if code == 410:
+        return "模型已下线"
+    if code == 429:
+        return "触发限流"
+    if 500 <= code < 600:
+        return "上游故障"
+    return f"HTTP {code}"
+
+
+def build_stability_rows(model_stats: dict, allowed, health: dict) -> list:
+    """把巡检统计拼成监控页「模型可用性」表格的行。
+
+    只要在提供商里声明过就出一行。checks=0 表示本时间窗口内还没巡检到，可用率按 None 处理
+    （页面显示 “--”）。以前这里会把「探过但一次都没成功」的模型整行删掉，后果是：
+      · 「全部状态」筛选名不副实（112 个模型只列 55 个）；
+      · 「服务异常（<50%）」这一档永远筛不到真正 0% 的模型 —— 恰恰是最该被看见的那批。
+    因此不再隐藏，改为照常返回，只在排序时沉底。"""
+    rows = []
+    for key in allowed:
+        s = model_stats.get(key) or {"ok": 0, "fail": 0, "error": 0, "total": 0, "latencies": []}
+        h = health.get(key) or {}
+        name, model = key.split("||", 1)
+        lats = s["latencies"]
+        avg_lat = sum(lats) / len(lats) if lats else None
+        rows.append({
+            "provider": name,
+            "model": model,
+            "checks": s["total"],
+            "ok": s["ok"],
+            "fail": s["fail"],
+            "error": s["error"],
+            "availability": round(s["ok"] / s["total"] * 100, 1) if s["total"] else None,
+            "avg_latency_ms": round(avg_lat) if avg_lat else None,
+            "min_latency_ms": min(lats) if lats else None,
+            "max_latency_ms": max(lats) if lats else None,
+            "last_status": h.get("status", "unknown"),
+            "last_code": h.get("code"),
+            "last_reason": None if h.get("status") == "ok" else (
+                classify_probe_failure(h.get("code"), h.get("status", "unknown"), h.get("detail", ""))
+                if h else None),
+            "vision": is_vision_model(model),
+        })
+    # 可用率高的在前；从未成功的（0%）沉到倒数第二档；本窗口还没巡检过的（None）垫底
+    rows.sort(key=lambda r: (-r["availability"] if r["availability"] is not None else 1,
+                             r["avg_latency_ms"] or 99999))
+    return rows
+
+
 @app.get("/api/stability")
 async def get_stability(hours: int = 24, _=Depends(verify_admin)):
     now = time.time()
@@ -1209,8 +1272,10 @@ async def get_stability(hours: int = 24, _=Depends(verify_admin)):
         return cached[1]
     records = await read_history(hours)
     model_stats: dict = {}
+    last_probe: dict = {}          # 每条记录里的当次探测结果；文件顺序＝时间顺序，后写覆盖前写
     for rec in records:
         for key, info in rec.get("data", {}).items():
+            last_probe[key] = info
             if key not in model_stats:
                 model_stats[key] = {"ok": 0, "fail": 0, "error": 0, "total": 0, "latencies": []}
             model_stats[key]["total"] += 1
@@ -1223,36 +1288,12 @@ async def get_stability(hours: int = 24, _=Depends(verify_admin)):
                 model_stats[key]["fail"] += 1
             elif st == "error":
                 model_stats[key]["error"] += 1
-    allowed = set()
-
-    for p in providers:
-        for m in p.get("models", []):
-            k = f"{p['name']}||{m}"
-            allowed.add(k)
-            if k not in model_stats:
-                model_stats[k] = {"ok": 0, "fail": 0, "error": 0, "total": 0, "latencies": []}
-    model_stats = {k: v for k, v in model_stats.items() if k in allowed}
-    result = []
-    for key, s in model_stats.items():
-        name, model = key.split("||", 1)
-        avg_lat = sum(s["latencies"]) / len(s["latencies"]) if s["latencies"] else None
-        result.append({
-            "provider": name,
-            "model": model,
-            "checks": s["total"],
-            "ok": s["ok"],
-            "fail": s["fail"],
-            "error": s["error"],
-            "availability": round(s["ok"] / s["total"] * 100, 1) if s["total"] else 0,
-            "avg_latency_ms": round(avg_lat) if avg_lat else None,
-            "min_latency_ms": min(s["latencies"]) if s["latencies"] else None,
-            "max_latency_ms": max(s["latencies"]) if s["latencies"] else None,
-            "last_status": health_status.get(key, {}).get("status", "unknown"),
-            "vision": is_vision_model(model),
-        })
-    # 隐藏从未成功过的模型（检查过但 ok=0），新加入的模型（checks=0）正常展示
-    result = [r for r in result if not (r["checks"] > 0 and r["ok"] == 0)]
-    result.sort(key=lambda x: (-x["availability"], x["avg_latency_ms"] or 99999))
+    # 去重后按提供商声明顺序出全部行（含从没成功过的，见 build_stability_rows 说明）
+    allowed = list(dict.fromkeys(f"{p['name']}||{m}" for p in providers for m in p.get("models", [])))
+    # 内存里的实时状态比历史记录新，优先用它；应用刚起来还没巡检时用历史记录兜底，
+    # 否则「失败原因」会空一片。
+    merged_probe = {**last_probe, **{k: v for k, v in health_status.items() if v}}
+    result = build_stability_rows(model_stats, allowed, merged_probe)
     _stability_cache[hours] = (now, result)
     return result
 

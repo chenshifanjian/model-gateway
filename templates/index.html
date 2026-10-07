@@ -399,6 +399,13 @@ tbody tr:last-child td { border-bottom: none; }
 
 .model-name { font-weight: 600; color: var(--text-primary); font-size: 14px;}
 .model-desc { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+/* 巡检查失败原因标签：last_reason 是后端 classify_probe_failure() 给出的固定枚举串
+   （或 "HTTP <code>"，code 为整数），不含上游原文，插值到此是安全的。 */
+.probe-reason {
+  font-size: 11px; color: var(--text-secondary); margin-left: 6px;
+  padding: 0 5px; line-height: 16px; border-radius: 4px; white-space: nowrap;
+  border: 0.5px solid var(--mac-border);
+}
 .model-provider-badge {
   font-size: 10px; font-weight: 600; color: #fff;
   background: var(--accent-primary); border: none;
@@ -1876,8 +1883,9 @@ function renderStability() {
   }
 
   tbody.innerHTML = filtered.map(d => {
-    const pct = typeof d.availability === 'number' ? d.availability.toFixed(1) : parseFloat(d.availability || 0).toFixed(1);
-    const barColor = pct >= 90 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
+    const noData = d.checks === 0 || d.availability === null || d.availability === undefined;
+    const pct = noData ? null : (typeof d.availability === 'number' ? d.availability.toFixed(1) : parseFloat(d.availability || 0).toFixed(1));
+    const barColor = pct === null ? 'var(--text-secondary)' : pct >= 90 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
     const avgL = d.avg_latency_ms !== null ? Math.round(d.avg_latency_ms) + ' ms' : '--';
     const minL = d.min_latency_ms !== null ? Math.round(d.min_latency_ms) + ' ms' : '--';
     const maxL = d.max_latency_ms !== null ? Math.round(d.max_latency_ms) + ' ms' : '--';
@@ -1890,10 +1898,13 @@ function renderStability() {
     if (d.last_status === 'ok') {
       lastStatusHtml = `<span title="上次巡检：正常" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--success);margin-left:6px;"></span>`;
     } else if (d.last_status === 'fail' || d.last_status === 'error') {
-      lastStatusHtml = `<span title="上次巡检：异常 (通常为提供商限流或报错)" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-left:6px;animation: pulse 2s infinite;"></span>`;
+      lastStatusHtml = `<span title="上次巡检：${d.last_reason || '异常'}${d.last_code ? '（HTTP ' + d.last_code + '）' : ''}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--danger);margin-left:6px;animation: pulse 2s infinite;"></span>`;
     } else {
       lastStatusHtml = `<span title="上次巡检：等待中..." style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--text-secondary);margin-left:6px;"></span>`;
     }
+    const reasonChip = (d.last_status === 'fail' || d.last_status === 'error') && d.last_reason
+      ? `<span class="probe-reason" title="最近一次巡检失败原因">${d.last_reason}${d.last_code ? ' · ' + d.last_code : ''}</span>`
+      : '';
 
     return `<tr>
       <td>
@@ -1901,15 +1912,16 @@ function renderStability() {
           <span class="model-provider-badge">${d.provider}</span>
           <span>${d.model}</span>
           ${lastStatusHtml}
+          ${reasonChip}
         </div>
         ${descHtml}
       </td>
       <td>
         <div class="avail-wrap">
           <span class="avail-bar">
-            <span class="avail-bar-fill" style="width:${pct}%;background:${barColor}"></span>
+            <span class="avail-bar-fill" style="width:${noData ? 0 : pct}%;background:${barColor}"></span>
           </span>
-          <span class="avail-text" style="color:${barColor}">${pct}%</span>
+          <span class="avail-text" style="color:${barColor}">${noData ? '--' : pct + '%'}</span>
         </div>
       </td>
       <td><span class="ctx-cell" data-model="${d.model}" title="点击修改上下文长度" style="cursor:pointer;color:var(--text-secondary);font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace;font-size:12px;">${ctxLen === '--' ? '--' : ctxLen}</span></td>
